@@ -18,12 +18,30 @@ interface CommandResult {
   output: string;
 }
 
+interface Flow {
+  name: string;
+  prompt: string;
+}
+
+const FLOW_STORAGE_KEY = 'openclaw-launcher.flows';
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 const logArea = $('log-area');
 const progressFill = $('progress-fill');
+const chatHistory = $('chat-history');
+
 let envReady = false;
 let statusRefreshInFlight = false;
+
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#039;',
+  }[char]!));
+}
 
 function log(message: string, level = 'info') {
   if (logArea.textContent === '等待操作...') {
@@ -38,14 +56,12 @@ function log(message: string, level = 'info') {
   logArea.scrollTop = logArea.scrollHeight;
 }
 
-function escapeHtml(value: string) {
-  return value.replace(/[&<>"']/g, (char) => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#039;',
-  }[char]!));
+function addChatMessage(role: 'user' | 'assistant' | 'system', text: string) {
+  const message = document.createElement('div');
+  message.className = `message ${role}`;
+  message.textContent = text;
+  chatHistory.appendChild(message);
+  chatHistory.scrollTop = chatHistory.scrollHeight;
 }
 
 function setProgress(value: number) {
@@ -105,26 +121,151 @@ async function withBusy<T>(buttonId: string, label: string, task: () => Promise<
   }
 }
 
+async function openclaw(args: string[]) {
+  if (!envReady) {
+    throw new Error('OpenClaw 未安装，无法执行命令。');
+  }
+  return invoke<CommandResult>('run_openclaw_command', { args });
+}
+
 async function runOpenClaw(args: string[], outputId: string, buttonId: string) {
   await withBusy(buttonId, '执行中...', async () => {
     const output = $(outputId);
-    if (!envReady) {
-      output.textContent = 'OpenClaw 未安装，无法执行命令。';
-      return;
-    }
-
     output.textContent = `执行中: openclaw ${args.join(' ')}`;
-    const result = await invoke<CommandResult>('run_openclaw_command', { args });
-    output.textContent = result.output || '(无输出)';
 
-    if (!result.success) {
-      log(`命令失败: openclaw ${args.join(' ')}`, 'error');
+    try {
+      const result = await openclaw(args);
+      output.textContent = result.output || '(无输出)';
+      if (!result.success) {
+        log(`命令失败: openclaw ${args.join(' ')}`, 'error');
+      }
+    } catch (error) {
+      output.textContent = String(error);
+      log(String(error), 'error');
     }
   });
 }
 
 function inputValue(id: string) {
   return ($(id) as HTMLInputElement).value.trim();
+}
+
+function loadFlows(): Flow[] {
+  try {
+    const raw = localStorage.getItem(FLOW_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveFlows(flows: Flow[]) {
+  localStorage.setItem(FLOW_STORAGE_KEY, JSON.stringify(flows));
+  renderFlows();
+}
+
+function normalizeFlowName(name: string) {
+  return name.trim().replace(/^\/+/, '').replace(/\s+/g, '-');
+}
+
+function renderFlows() {
+  const flows = loadFlows();
+  const custom = flows.length
+    ? flows.map((flow) => `/${flow.name}\n  ${flow.prompt}`).join('\n\n')
+    : '暂无自定义流程。';
+
+  $('flows-output').textContent = [
+    '内置 / 命令：',
+    '/help - 查看命令',
+    '/status - 查看 OpenClaw 状态',
+    '/agents - 查看 Agents',
+    '/skills - 查看 Skills',
+    '/tasks - 查看定时任务',
+    '/dashboard - 打开控制台',
+    '/restart - 重启 Gateway',
+    '',
+    '自定义流程：',
+    custom,
+  ].join('\n');
+}
+
+function getSlashHelp() {
+  const flows = loadFlows();
+  const flowLines = flows.length
+    ? flows.map((flow) => `/${flow.name} <输入> - 执行自定义流程`).join('\n')
+    : '暂无自定义流程。';
+
+  return [
+    '可用 / 命令：',
+    '/help',
+    '/status',
+    '/agents',
+    '/skills',
+    '/tasks',
+    '/dashboard',
+    '/restart',
+    '',
+    '自定义流程：',
+    flowLines,
+  ].join('\n');
+}
+
+async function runAgentMessage(message: string) {
+  const result = await openclaw(['agent', '--message', message]);
+  return result.output || '(无输出)';
+}
+
+async function handleSlashCommand(raw: string) {
+  const [commandRaw, ...rest] = raw.slice(1).trim().split(/\s+/);
+  const command = commandRaw.toLowerCase();
+  const input = rest.join(' ');
+
+  if (!command) return getSlashHelp();
+
+  if (command === 'help') return getSlashHelp();
+  if (command === 'status') return (await openclaw(['status'])).output || '(无输出)';
+  if (command === 'agents') return (await openclaw(['agents', 'list'])).output || '(无输出)';
+  if (command === 'skills') return (await openclaw(['skills', 'list'])).output || '(无输出)';
+  if (command === 'tasks') return (await openclaw(['cron', 'list', '--all'])).output || '(无输出)';
+  if (command === 'dashboard') {
+    await invoke('open_dashboard');
+    return '已打开 OpenClaw 控制台。';
+  }
+  if (command === 'restart') {
+    await invoke('launch_openclaw');
+    return 'Gateway 已请求重启。';
+  }
+
+  const flow = loadFlows().find((item) => item.name.toLowerCase() === command);
+  if (!flow) {
+    return `未知命令：/${command}\n\n${getSlashHelp()}`;
+  }
+
+  const prompt = flow.prompt.includes('{{input}}')
+    ? flow.prompt.replaceAll('{{input}}', input)
+    : [flow.prompt, input].filter(Boolean).join('\n\n输入：');
+  return runAgentMessage(prompt);
+}
+
+async function sendChat() {
+  const input = $('chat-input') as HTMLInputElement;
+  const message = input.value.trim();
+  if (!message) return;
+
+  input.value = '';
+  addChatMessage('user', message);
+
+  await withBusy('btn-chat-send', '发送中...', async () => {
+    try {
+      const reply = message.startsWith('/')
+        ? await handleSlashCommand(message)
+        : await runAgentMessage(message);
+      addChatMessage('assistant', reply);
+    } catch (error) {
+      addChatMessage('system', `执行失败：${error}`);
+      log(`对话执行失败: ${error}`, 'error');
+    }
+  });
 }
 
 function setupTabs() {
@@ -199,6 +340,43 @@ function setupLauncherActions() {
         log(`卸载失败: ${error}`, 'error');
       }
     });
+  };
+}
+
+function setupChatActions() {
+  $('btn-chat-send').onclick = () => void sendChat();
+  $('chat-input').addEventListener('keydown', (event) => {
+    const keyboardEvent = event as KeyboardEvent;
+    if (keyboardEvent.key === 'Enter') {
+      keyboardEvent.preventDefault();
+      void sendChat();
+    }
+  });
+  $('btn-chat-clear').onclick = () => {
+    chatHistory.innerHTML = '<div class="message system">对话已清空。输入 /help 查看可用命令。</div>';
+  };
+}
+
+function setupFlowActions() {
+  $('btn-flow-save').onclick = () => {
+    const name = normalizeFlowName(inputValue('flow-name'));
+    const prompt = ($('flow-prompt') as HTMLTextAreaElement).value.trim();
+    if (!name) return log('请输入流程名', 'warn');
+    if (!/^[a-zA-Z0-9_-]+$/.test(name)) return log('流程名只能包含字母、数字、- 和 _', 'warn');
+    if (!prompt) return log('请输入流程提示词', 'warn');
+
+    const flows = loadFlows().filter((flow) => flow.name !== name);
+    flows.push({ name, prompt });
+    saveFlows(flows.sort((a, b) => a.name.localeCompare(b.name)));
+    ($('flow-name') as HTMLInputElement).value = name;
+    addChatMessage('system', `流程 /${name} 已保存。`);
+  };
+
+  $('btn-flow-delete').onclick = () => {
+    const name = normalizeFlowName(inputValue('flow-name'));
+    if (!name) return log('请输入要删除的流程名', 'warn');
+    saveFlows(loadFlows().filter((flow) => flow.name !== name));
+    addChatMessage('system', `流程 /${name} 已删除。`);
   };
 }
 
@@ -281,9 +459,12 @@ void listen<{ text: string; level: string }>('log', (event) => {
 
 setupTabs();
 setupLauncherActions();
+setupChatActions();
+setupFlowActions();
 setupAgentActions();
 setupSkillActions();
 setupTaskActions();
 setupWindowActions();
+renderFlows();
 void checkEnv();
 window.setInterval(checkEnv, 30000);

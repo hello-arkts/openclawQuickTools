@@ -41,11 +41,7 @@
     }
     .icon-btn:hover { border-color: #58a6ff; }
     .icon-btn.close:hover { background: #da3633; border-color: #da3633; color: #fff; }
-    .layout {
-      min-height: 0;
-      display: grid;
-      grid-template-columns: 190px 1fr;
-    }
+    .layout { min-height: 0; display: grid; grid-template-columns: 190px 1fr; }
     .sidebar {
       padding: 16px;
       border-right: 1px solid #30363d;
@@ -63,11 +59,7 @@
       cursor: pointer;
       font-weight: 600;
     }
-    .tab.active, .tab:hover {
-      color: #e6edf3;
-      background: #21262d;
-      border-color: #30363d;
-    }
+    .tab.active, .tab:hover { color: #e6edf3; background: #21262d; border-color: #30363d; }
     .content {
       min-height: 0;
       overflow: hidden;
@@ -78,11 +70,7 @@
     }
     .panel { display: none; min-height: 0; }
     .panel.active { display: grid; gap: 14px; grid-template-rows: auto 1fr; }
-    .status-grid {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 10px;
-    }
+    .status-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
     .card {
       padding: 14px;
       border: 1px solid #30363d;
@@ -100,11 +88,7 @@
     .ok { color: #3fb950; }
     .warn { color: #d29922; }
     .no { color: #f85149; }
-    .actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-    }
+    .actions, .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
     .btn {
       min-width: 72px;
       padding: 8px 11px;
@@ -135,12 +119,7 @@
     .primary { background: #1f6feb; border-color: #1f6feb; }
     .danger { color: #f85149; border-color: #da3633; }
     .danger:hover:not(:disabled) { background: #da3633; color: #fff; }
-    .toolbar {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-    }
-    input {
+    input, textarea {
       flex: 1;
       min-width: 180px;
       padding: 10px 12px;
@@ -150,7 +129,13 @@
       color: #e6edf3;
       outline: none;
     }
-    input:focus { border-color: #58a6ff; }
+    input:focus, textarea:focus { border-color: #58a6ff; }
+    textarea {
+      width: 100%;
+      min-height: 96px;
+      resize: vertical;
+      font: 12px/1.5 "Cascadia Code", Consolas, monospace;
+    }
     pre, .log-area {
       min-height: 0;
       margin: 0;
@@ -165,18 +150,30 @@
     }
     .log-line { margin-bottom: 2px; }
     .time { margin-right: 8px; color: #6e7681; }
-    .progress {
-      height: 4px;
-      overflow: hidden;
-      border-radius: 999px;
-      background: #21262d;
+    .progress { height: 4px; overflow: hidden; border-radius: 999px; background: #21262d; }
+    .progress > div { width: 0; height: 100%; background: #58a6ff; transition: width .2s ease; }
+    .chat-history {
+      min-height: 0;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      background: #0d1117;
     }
-    .progress > div {
-      width: 0;
-      height: 100%;
-      background: #58a6ff;
-      transition: width .2s ease;
+    .message {
+      padding: 10px 12px;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      white-space: pre-wrap;
+      font-size: 12px;
+      line-height: 1.55;
     }
+    .message.user { align-self: flex-end; max-width: 82%; background: #1f6feb; border-color: #1f6feb; }
+    .message.assistant { align-self: flex-start; max-width: 92%; background: #161b22; }
+    .message.system { align-self: center; max-width: 92%; color: #8b949e; background: transparent; }
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
@@ -193,6 +190,8 @@
     <div class="layout">
       <aside class="sidebar">
         <button class="tab active" data-tab="launcher">启动器</button>
+        <button class="tab" data-tab="chat">对话</button>
+        <button class="tab" data-tab="flows">流程</button>
         <button class="tab" data-tab="agents">Agents 管理</button>
         <button class="tab" data-tab="skills">Skills 管理</button>
         <button class="tab" data-tab="tasks">定时任务</button>
@@ -222,10 +221,31 @@
           </div>
         </section>
 
+        <section class="panel" id="panel-chat">
+          <div class="toolbar">
+            <input id="chat-input" placeholder="输入消息，或输入 /help 查看可用命令" />
+            <button class="btn primary" id="btn-chat-send">发送</button>
+            <button class="btn" id="btn-chat-clear">清空</button>
+          </div>
+          <div class="chat-history" id="chat-history">
+            <div class="message system">普通输入会发送给 OpenClaw Agent；以 / 开头会执行内置命令或流程。</div>
+          </div>
+        </section>
+
+        <section class="panel" id="panel-flows">
+          <div class="toolbar">
+            <input id="flow-name" placeholder="流程名，例如 weekly-report，使用 /weekly-report 调用" />
+            <button class="btn primary" id="btn-flow-save">保存流程</button>
+            <button class="btn danger" id="btn-flow-delete">删除流程</button>
+          </div>
+          <textarea id="flow-prompt" placeholder="流程提示词。可用 {{input}} 引用 /流程名 后面的文本。"></textarea>
+          <pre id="flows-output">流程保存在本机。输入 /help 可以看到内置命令和自定义流程。</pre>
+        </section>
+
         <section class="panel" id="panel-agents">
           <div class="toolbar">
             <button class="btn primary" id="btn-agents-refresh">刷新 Agents</button>
-            <input id="agent-name" placeholder="新 Agent 名称，例如: research" />
+            <input id="agent-name" placeholder="新 Agent 名称，例如 research" />
             <button class="btn" id="btn-agent-add">添加</button>
             <button class="btn danger" id="btn-agent-delete">删除</button>
           </div>
@@ -252,9 +272,9 @@
             <button class="btn danger" id="btn-task-delete">删除</button>
           </div>
           <div class="toolbar">
-            <input id="task-name" placeholder="任务名称，例如: daily-summary" />
-            <input id="task-every" placeholder="间隔，例如: 1h / 30m" />
-            <input id="task-message" placeholder="任务内容，例如: 总结今天的状态" />
+            <input id="task-name" placeholder="任务名称，例如 daily-summary" />
+            <input id="task-every" placeholder="间隔，例如 1h / 30m" />
+            <input id="task-message" placeholder="任务内容，例如 总结今天的状态" />
             <button class="btn" id="btn-task-add">添加任务</button>
           </div>
           <pre id="tasks-output">点击“刷新任务”查看当前定时任务。</pre>
