@@ -112,7 +112,12 @@ async function checkEnv() {
   }
 }
 
-async function withBusy<T>(buttonId: string, label: string, task: () => Promise<T>) {
+async function withBusy<T>(
+  buttonId: string,
+  label: string,
+  task: () => Promise<T>,
+  options: { refreshEnv?: boolean } = {},
+) {
   const button = $(buttonId) as HTMLButtonElement;
   const originalText = button.textContent || '';
   button.disabled = true;
@@ -125,14 +130,13 @@ async function withBusy<T>(buttonId: string, label: string, task: () => Promise<
     button.classList.remove('busy');
     button.textContent = originalText;
     button.disabled = false;
-    await checkEnv();
+    if (options.refreshEnv) {
+      await checkEnv();
+    }
   }
 }
 
 async function openclaw(args: string[]) {
-  if (!envReady) {
-    throw new Error('OpenClaw 未安装，无法执行命令。');
-  }
   return invoke<CommandResult>('run_openclaw_command', { args });
 }
 
@@ -283,6 +287,11 @@ function acceptSlashSelection() {
   if (command) fillSlashCommand(command);
 }
 
+function shouldAcceptSlashWithEnter() {
+  const input = ($('chat-input') as HTMLInputElement).value.trim();
+  return input === '/' || !slashCommands().some((command) => input === command.value);
+}
+
 function getSlashHelp() {
   const flows = loadFlows();
   const flowLines = flows.length
@@ -383,7 +392,7 @@ function setupLauncherActions() {
       setProgress(0);
       log(`重启失败: ${error}`, 'error');
     }
-  });
+  }, { refreshEnv: true });
 
   $('btn-refresh-status').onclick = () => withBusy('btn-refresh-status', '刷新中...', async () => {
     setProgress(35);
@@ -409,7 +418,7 @@ function setupLauncherActions() {
       setProgress(0);
       log(`安装 Node.js 失败: ${error}`, 'error');
     }
-  });
+  }, { refreshEnv: true });
 
   $('btn-install-oc').onclick = () => withBusy('btn-install-oc', '安装中...', async () => {
     setProgress(35);
@@ -420,7 +429,7 @@ function setupLauncherActions() {
       setProgress(0);
       log(`安装 OpenClaw 失败: ${error}`, 'error');
     }
-  });
+  }, { refreshEnv: true });
 
   $('btn-uninstall').onclick = () => {
     if (!confirm('确定卸载 OpenClaw CLI？')) return;
@@ -433,7 +442,7 @@ function setupLauncherActions() {
         setProgress(0);
         log(`卸载失败: ${error}`, 'error');
       }
-    });
+    }, { refreshEnv: true });
   };
 }
 
@@ -472,10 +481,11 @@ function setupChatActions() {
     }
     if (keyboardEvent.key === 'Enter') {
       keyboardEvent.preventDefault();
-      if (slashMenu.classList.contains('open')) {
+      if (slashMenu.classList.contains('open') && shouldAcceptSlashWithEnter()) {
         acceptSlashSelection();
         return;
       }
+      hideSlashMenu();
       void sendChat();
     }
   });
