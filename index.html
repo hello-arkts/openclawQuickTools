@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenClaw Launcher</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      height: 100vh;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+    }
+    #app {
+      height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      background: linear-gradient(135deg, #0d1117, #161b22);
+    }
+    .titlebar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      border-bottom: 1px solid #30363d;
+      background: #161b22;
+    }
+    .brand { font-weight: 700; color: #58a6ff; }
+    .window-actions { display: flex; gap: 6px; }
+    .icon-btn {
+      width: 32px;
+      height: 28px;
+      border: 1px solid #30363d;
+      border-radius: 7px;
+      background: #21262d;
+      color: #c9d1d9;
+      cursor: pointer;
+    }
+    .icon-btn:hover { border-color: #58a6ff; }
+    .icon-btn.close:hover { background: #da3633; border-color: #da3633; color: #fff; }
+    .layout {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 190px 1fr;
+    }
+    .sidebar {
+      padding: 16px;
+      border-right: 1px solid #30363d;
+      background: rgba(22, 27, 34, .8);
+    }
+    .tab {
+      width: 100%;
+      margin-bottom: 8px;
+      padding: 10px 12px;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      background: transparent;
+      color: #8b949e;
+      text-align: left;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .tab.active, .tab:hover {
+      color: #e6edf3;
+      background: #21262d;
+      border-color: #30363d;
+    }
+    .content {
+      min-height: 0;
+      overflow: hidden;
+      padding: 18px;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 14px;
+    }
+    .panel { display: none; min-height: 0; }
+    .panel.active { display: grid; gap: 14px; grid-template-rows: auto 1fr; }
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+    }
+    .card {
+      padding: 14px;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      background: #161b22;
+    }
+    .label {
+      margin-bottom: 6px;
+      font-size: 11px;
+      color: #8b949e;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    .value { font-size: 14px; font-weight: 700; }
+    .ok { color: #3fb950; }
+    .warn { color: #d29922; }
+    .no { color: #f85149; }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .btn {
+      min-width: 72px;
+      padding: 8px 11px;
+      border: 1px solid #30363d;
+      border-radius: 9px;
+      background: #21262d;
+      color: #e6edf3;
+      cursor: pointer;
+      font-weight: 650;
+      font-size: 12px;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+    .btn:hover:not(:disabled) { border-color: #58a6ff; background: #30363d; }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .btn.busy::before {
+      content: "";
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      margin-right: 6px;
+      border: 2px solid currentColor;
+      border-right-color: transparent;
+      border-radius: 999px;
+      vertical-align: -1px;
+      animation: spin .8s linear infinite;
+    }
+    .primary { background: #1f6feb; border-color: #1f6feb; }
+    .danger { color: #f85149; border-color: #da3633; }
+    .danger:hover:not(:disabled) { background: #da3633; color: #fff; }
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    input {
+      flex: 1;
+      min-width: 180px;
+      padding: 10px 12px;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      background: #0d1117;
+      color: #e6edf3;
+      outline: none;
+    }
+    input:focus { border-color: #58a6ff; }
+    pre, .log-area {
+      min-height: 0;
+      margin: 0;
+      padding: 12px;
+      overflow: auto;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      background: #0d1117;
+      color: #c9d1d9;
+      font: 12px/1.55 "Cascadia Code", Consolas, monospace;
+      white-space: pre-wrap;
+    }
+    .log-line { margin-bottom: 2px; }
+    .time { margin-right: 8px; color: #6e7681; }
+    .progress {
+      height: 4px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #21262d;
+    }
+    .progress > div {
+      width: 0;
+      height: 100%;
+      background: #58a6ff;
+      transition: width .2s ease;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="titlebar">
+      <div class="brand">OpenClaw Launcher</div>
+      <div class="window-actions">
+        <button class="icon-btn" id="btn-min" title="最小化">—</button>
+        <button class="icon-btn close" id="btn-close" title="关闭">×</button>
+      </div>
+    </div>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <button class="tab active" data-tab="launcher">启动器</button>
+        <button class="tab" data-tab="agents">Agents 管理</button>
+        <button class="tab" data-tab="skills">Skills 管理</button>
+        <button class="tab" data-tab="tasks">定时任务</button>
+        <button class="tab" data-tab="logs">日志</button>
+      </aside>
+
+      <main class="content">
+        <section class="panel active" id="panel-launcher">
+          <div>
+            <div class="status-grid">
+              <div class="card"><div class="label">Node.js</div><div class="value" id="st-node">检测中...</div></div>
+              <div class="card"><div class="label">npm</div><div class="value" id="st-npm">检测中...</div></div>
+              <div class="card"><div class="label">OpenClaw</div><div class="value" id="st-oc">检测中...</div></div>
+              <div class="card"><div class="label">Gateway</div><div class="value" id="st-gw">检测中...</div></div>
+            </div>
+            <div class="progress" style="margin-top:12px"><div id="progress-fill"></div></div>
+          </div>
+          <div class="card">
+            <div class="actions">
+              <button class="btn primary" id="btn-launch" disabled>重启 Gateway</button>
+              <button class="btn" id="btn-refresh-status">刷新状态</button>
+              <button class="btn" id="btn-dashboard">打开界面</button>
+              <button class="btn" id="btn-install-node" disabled>安装 Node.js</button>
+              <button class="btn" id="btn-install-oc" disabled>安装 OpenClaw</button>
+              <button class="btn danger" id="btn-uninstall" disabled>卸载 OpenClaw</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" id="panel-agents">
+          <div class="toolbar">
+            <button class="btn primary" id="btn-agents-refresh">刷新 Agents</button>
+            <input id="agent-name" placeholder="新 Agent 名称，例如: research" />
+            <button class="btn" id="btn-agent-add">添加</button>
+            <button class="btn danger" id="btn-agent-delete">删除</button>
+          </div>
+          <pre id="agents-output">点击“刷新 Agents”查看当前配置。</pre>
+        </section>
+
+        <section class="panel" id="panel-skills">
+          <div class="toolbar">
+            <button class="btn primary" id="btn-skills-refresh">刷新 Skills</button>
+            <input id="skill-query" placeholder="Skill 名称或搜索词" />
+            <button class="btn" id="btn-skill-info">详情</button>
+            <button class="btn" id="btn-skill-search">搜索</button>
+            <button class="btn" id="btn-skill-install">安装</button>
+          </div>
+          <pre id="skills-output">点击“刷新 Skills”查看可用技能。</pre>
+        </section>
+
+        <section class="panel" id="panel-tasks">
+          <div class="toolbar">
+            <button class="btn primary" id="btn-tasks-refresh">刷新任务</button>
+            <button class="btn" id="btn-tasks-status">调度状态</button>
+            <input id="task-id" placeholder="任务 ID（运行/删除用）" />
+            <button class="btn" id="btn-task-run">立即运行</button>
+            <button class="btn danger" id="btn-task-delete">删除</button>
+          </div>
+          <div class="toolbar">
+            <input id="task-name" placeholder="任务名称，例如: daily-summary" />
+            <input id="task-every" placeholder="间隔，例如: 1h / 30m" />
+            <input id="task-message" placeholder="任务内容，例如: 总结今天的状态" />
+            <button class="btn" id="btn-task-add">添加任务</button>
+          </div>
+          <pre id="tasks-output">点击“刷新任务”查看当前定时任务。</pre>
+        </section>
+
+        <section class="panel" id="panel-logs">
+          <div class="toolbar">
+            <button class="btn" id="btn-clear-log">清空日志</button>
+          </div>
+          <div class="log-area" id="log-area">等待操作...</div>
+        </section>
+      </main>
+    </div>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
