@@ -306,7 +306,7 @@ fn run_openclaw_command(args: Vec<String>) -> Result<CommandResult, String> {
 
     Ok(CommandResult {
         success: output.status.success(),
-        output: format!("{stdout}{stderr}").trim().to_string(),
+        output: clean_openclaw_output(&format!("{stdout}{stderr}")),
     })
 }
 
@@ -333,6 +333,47 @@ fn open_control_ui() -> Result<(), String> {
         .status()
         .map_err(|e| format!("打开 OpenClaw 界面失败: {e}"))?;
     Ok(())
+}
+
+fn clean_openclaw_output(output: &str) -> String {
+    let mut cleaned = Vec::new();
+    let mut skipping_doctor_box = false;
+
+    for line in output.lines() {
+        if line.contains("Doctor warnings") {
+            skipping_doctor_box = true;
+            continue;
+        }
+        if skipping_doctor_box {
+            let trimmed = line.trim();
+            if trimmed == "|" || trimmed.starts_with('+') {
+                continue;
+            }
+            if line.contains("[state-migrations]")
+                || line.contains("Legacy state migration warnings")
+                || line.contains("Left legacy config health state in place")
+                || line.contains("config-health.json")
+                || line.starts_with('|')
+            {
+                continue;
+            }
+            if trimmed.is_empty() {
+                skipping_doctor_box = false;
+                continue;
+            }
+            skipping_doctor_box = false;
+        }
+        if line.contains("[state-migrations]")
+            || line.contains("Legacy state migration warnings")
+            || line.contains("Left legacy config health state in place")
+            || line.contains("config-health.json")
+        {
+            continue;
+        }
+        cleaned.push(line);
+    }
+
+    cleaned.join("\n").trim().to_string()
 }
 
 fn emit_log(app: &tauri::AppHandle, text: &str, level: &str) {

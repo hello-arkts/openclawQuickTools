@@ -137,7 +137,47 @@ async function withBusy<T>(
 }
 
 async function openclaw(args: string[]) {
-  return invoke<CommandResult>('run_openclaw_command', { args });
+  const result = await invoke<CommandResult>('run_openclaw_command', { args });
+  return {
+    ...result,
+    output: cleanOpenClawOutput(result.output),
+  };
+}
+
+function cleanOpenClawOutput(output: string) {
+  const lines = output.split(/\r?\n/);
+  const cleaned: string[] = [];
+  let skippingDoctorBox = false;
+
+  for (const line of lines) {
+    if (line.includes('Doctor warnings')) {
+      skippingDoctorBox = true;
+      continue;
+    }
+    if (skippingDoctorBox) {
+      if (line.trim().startsWith('+') || line.trim() === '|') {
+        continue;
+      }
+      if (line.includes('[state-migrations]') || line.includes('Legacy state migration warnings')) {
+        continue;
+      }
+      if (line.trim() === '') {
+        skippingDoctorBox = false;
+        continue;
+      }
+      if (line.includes('Left legacy config health state in place')) continue;
+      if (line.includes('config-health.json')) continue;
+      if (/^\|\s*$/.test(line) || /^\|/.test(line)) continue;
+      skippingDoctorBox = false;
+    }
+    if (line.includes('[state-migrations]')) continue;
+    if (line.includes('Legacy state migration warnings')) continue;
+    if (line.includes('Left legacy config health state in place')) continue;
+    if (line.includes('config-health.json')) continue;
+    cleaned.push(line);
+  }
+
+  return cleaned.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 async function runOpenClaw(args: string[], outputId: string, buttonId: string) {
@@ -400,6 +440,15 @@ function setupLauncherActions() {
     setProgress(100);
     log('状态已刷新', 'success');
   });
+
+  $('btn-doctor-fix').onclick = () => withBusy('btn-doctor-fix', '修复中...', async () => {
+    try {
+      const result = await openclaw(['doctor', '--fix']);
+      log(result.output || '修复完成', result.success ? 'success' : 'warn');
+    } catch (error) {
+      log(`一键修复失败: ${error}`, 'error');
+    }
+  }, { refreshEnv: true });
 
   $('btn-dashboard').onclick = () => withBusy('btn-dashboard', '打开中...', async () => {
     try {
