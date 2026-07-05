@@ -18,6 +18,10 @@ interface CommandResult {
   output: string;
 }
 
+interface GatewayAgentResult {
+  output: string;
+}
+
 interface Flow {
   name: string;
   prompt: string;
@@ -354,7 +358,7 @@ function getSlashHelp() {
 }
 
 async function runAgentMessage(message: string) {
-  const result = await openclaw(['agent', '--message', message]);
+  const result = await invoke<GatewayAgentResult>('gateway_agent_message', { message });
   return result.output || '(无输出)';
 }
 
@@ -442,10 +446,13 @@ function setupLauncherActions() {
   });
 
   $('btn-doctor-fix').onclick = () => withBusy('btn-doctor-fix', '修复中...', async () => {
+    setProgress(35);
     try {
       const result = await openclaw(['doctor', '--fix']);
+      setProgress(100);
       log(result.output || '修复完成', result.success ? 'success' : 'warn');
     } catch (error) {
+      setProgress(0);
       log(`一键修复失败: ${error}`, 'error');
     }
   }, { refreshEnv: true });

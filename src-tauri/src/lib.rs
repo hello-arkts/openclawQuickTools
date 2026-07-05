@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::process::Stdio;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
+use tungstenite::{connect, http::Request, Message};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -29,6 +32,11 @@ struct LogLine {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CommandResult {
     pub success: bool,
+    pub output: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GatewayAgentResult {
     pub output: String,
 }
 
@@ -316,6 +324,18 @@ fn open_dashboard() -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn gateway_agent_message(message: String) -> Result<GatewayAgentResult, String> {
+    let trimmed = message.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("消息不能为空".to_string());
+    }
+
+    tokio::task::spawn_blocking(move || gateway_agent_message_blocking(&trimmed))
+        .await
+        .map_err(|e| format!("Gateway WS 任务失败: {e}"))?
+}
+
+#[tauri::command]
 fn close_window(app: tauri::AppHandle, window: tauri::Window) {
     window.close().ok();
     app.exit(0);
@@ -333,6 +353,172 @@ fn open_control_ui() -> Result<(), String> {
         .status()
         .map_err(|e| format!("打开 OpenClaw 界面失败: {e}"))?;
     Ok(())
+}
+
+fn gateway_agent_message_blocking(message: &str) -> Result<GatewayAgentResult, String> {
+    let request = Request::builder()
+        .uri("ws://127.0.0.1:18789")
+        .header("Origin", "http://127.0.0.1:18789")
+        .body(())
+        .map_err(|e| format!("Gateway WS 请求创建失败: {e}"))?;
+    let (mut socket, _) = connect(request).map_err(|e| format!("Gateway WS 连接失败: {e}"))?;
+
+    if let tungstenite::stream::MaybeTlsStream::Plain(stream) = socket.get_mut() {
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(660)));
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
+    }
+
+    loop {
+        let raw = socket
+            .read()
+            .map_err(|e| format!("Gateway WS 读取失败: {e}"))?;
+        let text = raw
+            .to_text()
+            .map_err(|e| format!("Gateway WS 非文本消息: {e}"))?;
+        let frame: Value =
+            serde_json::from_str(text).map_err(|e| format!("Gateway WS JSON 解析失败: {e}"))?;
+        if frame.get("type").and_then(Value::as_str) == Some("event")
+            && frame.get("event").and_then(Value::as_str) == Some("connect.challenge")
+        {
+            break;
+        }
+    }
+
+    socket
+        .send(Message::Text(
+            json!({
+                "type": "req",
+                "id": "connect",
+                "method": "connect",
+                "params": {
+                    "minProtocol": 4,
+                    "maxProtocol": 4,
+                    "client": {
+                        "id": "openclaw-control-ui",
+                        "displayName": "OpenClaw Launcher",
+                        "version": env!("CARGO_PKG_VERSION"),
+                        "platform": std::env::consts::OS,
+                        "mode": "ui"
+                    },
+                    "caps": [],
+                    "role": "operator"
+                }
+            })
+            .to_string(),
+        ))
+        .map_err(|e| format!("Gateway WS 握手发送失败: {e}"))?;
+
+    wait_gateway_response(&mut socket, "connect", false)?;
+
+    let id = format!("agent-{}", now_millis());
+    socket
+        .send(Message::Text(
+            json!({
+                "type": "req",
+                "id": id,
+                "method": "agent",
+                "params": {
+                    "message": message,
+                    "sessionKey": "agent:main:launcher",
+                    "idempotencyKey": format!("launcher-{}", now_millis()),
+                    "cleanupBundleMcpOnRunEnd": true,
+                    "timeout": 600
+                }
+            })
+            .to_string(),
+        ))
+        .map_err(|e| format!("Gateway WS 对话发送失败: {e}"))?;
+
+    let payload = wait_gateway_response(&mut socket, &id, true)?;
+    Ok(GatewayAgentResult {
+        output: format_agent_payload(&payload),
+    })
+}
+
+fn wait_gateway_response(
+    socket: &mut tungstenite::WebSocket<
+        tungstenite::stream::MaybeTlsStream<std::net::TcpStream>,
+    >,
+    id: &str,
+    expect_final: bool,
+) -> Result<Value, String> {
+    loop {
+        let raw = socket
+            .read()
+            .map_err(|e| format!("Gateway WS 读取失败: {e}"))?;
+        if !raw.is_text() {
+            continue;
+        }
+        let text = raw
+            .to_text()
+            .map_err(|e| format!("Gateway WS 非文本消息: {e}"))?;
+        let frame: Value =
+            serde_json::from_str(text).map_err(|e| format!("Gateway WS JSON 解析失败: {e}"))?;
+        if frame.get("type").and_then(Value::as_str) != Some("res") {
+            continue;
+        }
+        if frame.get("id").and_then(Value::as_str) != Some(id) {
+            continue;
+        }
+        if frame.get("ok").and_then(Value::as_bool) != Some(true) {
+            let message = frame
+                .pointer("/error/message")
+                .and_then(Value::as_str)
+                .unwrap_or("Gateway WS 请求失败");
+            return Err(message.to_string());
+        }
+        let payload = frame.get("payload").cloned().unwrap_or(Value::Null);
+        if expect_final && payload.get("status").and_then(Value::as_str) == Some("accepted") {
+            continue;
+        }
+        return Ok(payload);
+    }
+}
+
+fn format_agent_payload(payload: &Value) -> String {
+    if let Some(summary) = payload.get("summary").and_then(Value::as_str) {
+        if !summary.trim().is_empty() {
+            return summary.trim().to_string();
+        }
+    }
+
+    let mut lines = Vec::new();
+    if let Some(payloads) = payload.pointer("/result/payloads").and_then(Value::as_array) {
+        for item in payloads {
+            if let Some(text) = item.get("text").and_then(Value::as_str) {
+                if !text.trim().is_empty() {
+                    lines.push(text.trim().to_string());
+                }
+            }
+            if let Some(media_url) = item.get("mediaUrl").and_then(Value::as_str) {
+                if !media_url.trim().is_empty() {
+                    lines.push(format!("Attachment: {}", media_url.trim()));
+                }
+            }
+            if let Some(media_urls) = item.get("mediaUrls").and_then(Value::as_array) {
+                for url in media_urls {
+                    if let Some(url) = url.as_str() {
+                        if !url.trim().is_empty() {
+                            lines.push(format!("Attachment: {}", url.trim()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if lines.is_empty() {
+        "没有收到回复。".to_string()
+    } else {
+        lines.join("\n")
+    }
+}
+
+fn now_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
 }
 
 fn clean_openclaw_output(output: &str) -> String {
@@ -400,6 +586,7 @@ pub fn run() {
             install_openclaw,
             launch_openclaw,
             open_dashboard,
+            gateway_agent_message,
             run_openclaw_command,
             uninstall_openclaw,
         ])
