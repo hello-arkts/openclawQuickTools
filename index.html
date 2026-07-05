@@ -174,6 +174,36 @@
     .message.user { align-self: flex-end; max-width: 82%; background: #1f6feb; border-color: #1f6feb; }
     .message.assistant { align-self: flex-start; max-width: 92%; background: #161b22; }
     .message.system { align-self: center; max-width: 92%; color: #8b949e; background: transparent; }
+    .chat-toolbar { position: relative; }
+    .slash-menu {
+      position: absolute;
+      left: 0;
+      right: 150px;
+      top: 42px;
+      z-index: 10;
+      display: none;
+      max-height: 260px;
+      overflow: auto;
+      padding: 6px;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      background: #161b22;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, .35);
+    }
+    .slash-menu.open { display: block; }
+    .slash-item {
+      width: 100%;
+      padding: 8px 10px;
+      border: 0;
+      border-radius: 9px;
+      background: transparent;
+      color: #c9d1d9;
+      text-align: left;
+      cursor: pointer;
+    }
+    .slash-item:hover, .slash-item.active { background: #21262d; color: #fff; }
+    .slash-name { font-weight: 700; color: #58a6ff; }
+    .slash-desc { margin-top: 3px; color: #8b949e; font-size: 11px; }
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
@@ -222,10 +252,11 @@
         </section>
 
         <section class="panel" id="panel-chat">
-          <div class="toolbar">
+          <div class="toolbar chat-toolbar">
             <input id="chat-input" placeholder="输入消息，或输入 /help 查看可用命令" />
             <button class="btn primary" id="btn-chat-send">发送</button>
             <button class="btn" id="btn-chat-clear">清空</button>
+            <div class="slash-menu" id="slash-menu"></div>
           </div>
           <div class="chat-history" id="chat-history">
             <div class="message system">普通输入会发送给 OpenClaw Agent；以 / 开头会执行内置命令或流程。</div>

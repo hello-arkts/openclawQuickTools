@@ -23,15 +23,23 @@ interface Flow {
   prompt: string;
 }
 
+interface SlashCommand {
+  name: string;
+  description: string;
+  value: string;
+}
+
 const FLOW_STORAGE_KEY = 'openclaw-launcher.flows';
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 const logArea = $('log-area');
 const progressFill = $('progress-fill');
 const chatHistory = $('chat-history');
+const slashMenu = $('slash-menu');
 
 let envReady = false;
 let statusRefreshInFlight = false;
+let activeSlashIndex = 0;
 
 function escapeHtml(value: string) {
   return value.replace(/[&<>"']/g, (char) => ({
@@ -187,6 +195,92 @@ function renderFlows() {
     '自定义流程：',
     custom,
   ].join('\n');
+}
+
+function builtInSlashCommands(): SlashCommand[] {
+  return [
+    { name: 'help', value: '/help', description: '查看所有内置命令和自定义流程' },
+    { name: 'status', value: '/status', description: '查看 OpenClaw 状态' },
+    { name: 'agents', value: '/agents', description: '查看 Agents 列表' },
+    { name: 'skills', value: '/skills', description: '查看 Skills 列表' },
+    { name: 'tasks', value: '/tasks', description: '查看定时任务' },
+    { name: 'dashboard', value: '/dashboard', description: '打开 OpenClaw 控制台' },
+    { name: 'restart', value: '/restart', description: '重启 Gateway' },
+  ];
+}
+
+function slashCommands(): SlashCommand[] {
+  const flows = loadFlows().map((flow) => ({
+    name: flow.name,
+    value: `/${flow.name}`,
+    description: `自定义流程：${flow.prompt.slice(0, 64)}${flow.prompt.length > 64 ? '...' : ''}`,
+  }));
+  return [...builtInSlashCommands(), ...flows];
+}
+
+function slashQuery(value: string) {
+  if (!value.startsWith('/')) return null;
+  return value.slice(1).split(/\s+/)[0].toLowerCase();
+}
+
+function hideSlashMenu() {
+  slashMenu.classList.remove('open');
+  slashMenu.innerHTML = '';
+  activeSlashIndex = 0;
+}
+
+function fillSlashCommand(command: SlashCommand) {
+  const input = $('chat-input') as HTMLInputElement;
+  input.value = `${command.value} `;
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
+  hideSlashMenu();
+}
+
+function renderSlashMenu() {
+  const input = $('chat-input') as HTMLInputElement;
+  const query = slashQuery(input.value);
+  if (query === null || input.value.includes(' ')) {
+    hideSlashMenu();
+    return;
+  }
+
+  const commands = slashCommands().filter((command) => command.name.toLowerCase().includes(query));
+  if (commands.length === 0) {
+    hideSlashMenu();
+    return;
+  }
+
+  activeSlashIndex = Math.min(activeSlashIndex, commands.length - 1);
+  slashMenu.innerHTML = '';
+  commands.forEach((command, index) => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = `slash-item${index === activeSlashIndex ? ' active' : ''}`;
+    item.innerHTML = `<div class="slash-name">${escapeHtml(command.value)}</div><div class="slash-desc">${escapeHtml(command.description)}</div>`;
+    item.onmousedown = (event) => {
+      event.preventDefault();
+      fillSlashCommand(command);
+    };
+    slashMenu.appendChild(item);
+  });
+  slashMenu.classList.add('open');
+}
+
+function moveSlashSelection(delta: number) {
+  const count = slashMenu.querySelectorAll('.slash-item').length;
+  if (count === 0) return;
+  activeSlashIndex = (activeSlashIndex + delta + count) % count;
+  renderSlashMenu();
+}
+
+function acceptSlashSelection() {
+  const commands = slashCommands().filter((command) => {
+    const query = slashQuery(($('chat-input') as HTMLInputElement).value) || '';
+    return command.name.toLowerCase().includes(query);
+  });
+  const command = commands[activeSlashIndex];
+  if (command) fillSlashCommand(command);
 }
 
 function getSlashHelp() {
@@ -345,10 +439,43 @@ function setupLauncherActions() {
 
 function setupChatActions() {
   $('btn-chat-send').onclick = () => void sendChat();
+  $('chat-input').addEventListener('input', () => {
+    activeSlashIndex = 0;
+    renderSlashMenu();
+  });
+  $('chat-input').addEventListener('blur', () => {
+    window.setTimeout(hideSlashMenu, 120);
+  });
   $('chat-input').addEventListener('keydown', (event) => {
     const keyboardEvent = event as KeyboardEvent;
+    if (slashMenu.classList.contains('open')) {
+      if (keyboardEvent.key === 'ArrowDown') {
+        keyboardEvent.preventDefault();
+        moveSlashSelection(1);
+        return;
+      }
+      if (keyboardEvent.key === 'ArrowUp') {
+        keyboardEvent.preventDefault();
+        moveSlashSelection(-1);
+        return;
+      }
+      if (keyboardEvent.key === 'Tab') {
+        keyboardEvent.preventDefault();
+        acceptSlashSelection();
+        return;
+      }
+      if (keyboardEvent.key === 'Escape') {
+        keyboardEvent.preventDefault();
+        hideSlashMenu();
+        return;
+      }
+    }
     if (keyboardEvent.key === 'Enter') {
       keyboardEvent.preventDefault();
+      if (slashMenu.classList.contains('open')) {
+        acceptSlashSelection();
+        return;
+      }
       void sendChat();
     }
   });
@@ -369,6 +496,7 @@ function setupFlowActions() {
     flows.push({ name, prompt });
     saveFlows(flows.sort((a, b) => a.name.localeCompare(b.name)));
     ($('flow-name') as HTMLInputElement).value = name;
+    renderSlashMenu();
     addChatMessage('system', `流程 /${name} 已保存。`);
   };
 
@@ -376,6 +504,7 @@ function setupFlowActions() {
     const name = normalizeFlowName(inputValue('flow-name'));
     if (!name) return log('请输入要删除的流程名', 'warn');
     saveFlows(loadFlows().filter((flow) => flow.name !== name));
+    renderSlashMenu();
     addChatMessage('system', `流程 /${name} 已删除。`);
   };
 }
