@@ -44,6 +44,8 @@ const slashMenu = $('slash-menu');
 let envReady = false;
 let statusRefreshInFlight = false;
 let activeSlashIndex = 0;
+let progressTimer: number | null = null;
+let progressValue = 0;
 
 function escapeHtml(value: string) {
   return value.replace(/[&<>"']/g, (char) => ({
@@ -74,13 +76,32 @@ function addChatMessage(role: 'user' | 'assistant' | 'system', text: string) {
   message.textContent = text;
   chatHistory.appendChild(message);
   chatHistory.scrollTop = chatHistory.scrollHeight;
+  return message;
 }
 
 function setProgress(value: number) {
-  progressFill.style.width = `${value}%`;
+  progressValue = Math.max(0, Math.min(100, value));
+  progressFill.style.width = `${progressValue}%`;
   if (value === 100) {
     window.setTimeout(() => setProgress(0), 700);
   }
+}
+
+function startProgress() {
+  stopProgress(false);
+  setProgress(Math.max(progressValue, 12));
+  progressTimer = window.setInterval(() => {
+    const next = progressValue < 45 ? progressValue + 7 : progressValue < 75 ? progressValue + 4 : progressValue + 1;
+    setProgress(Math.min(next, 92));
+  }, 450);
+}
+
+function stopProgress(complete: boolean) {
+  if (progressTimer !== null) {
+    window.clearInterval(progressTimer);
+    progressTimer = null;
+  }
+  if (complete) setProgress(100);
 }
 
 function setStatus(id: string, text: string, cls: string) {
@@ -120,17 +141,27 @@ async function withBusy<T>(
   buttonId: string,
   label: string,
   task: () => Promise<T>,
-  options: { refreshEnv?: boolean } = {},
+  options: { refreshEnv?: boolean; progress?: boolean } = {},
 ) {
   const button = $(buttonId) as HTMLButtonElement;
   const originalText = button.textContent || '';
   button.disabled = true;
   button.classList.add('busy');
   button.textContent = label;
+  if (options.progress) {
+    startProgress();
+  }
 
   try {
-    return await task();
+    const result = await task();
+    if (options.progress && progressValue > 0) {
+      stopProgress(true);
+    }
+    return result;
   } finally {
+    if (options.progress) {
+      stopProgress(false);
+    }
     button.classList.remove('busy');
     button.textContent = originalText;
     button.disabled = false;
@@ -199,7 +230,7 @@ async function runOpenClaw(args: string[], outputId: string, buttonId: string) {
       output.textContent = String(error);
       log(String(error), 'error');
     }
-  });
+  }, { progress: true });
 }
 
 function inputValue(id: string) {
@@ -401,18 +432,21 @@ async function sendChat() {
 
   input.value = '';
   addChatMessage('user', message);
+  const pending = addChatMessage('system', '正在通过 Gateway WebSocket 等待响应...');
 
   await withBusy('btn-chat-send', '发送中...', async () => {
     try {
       const reply = message.startsWith('/')
         ? await handleSlashCommand(message)
         : await runAgentMessage(message);
+      pending.remove();
       addChatMessage('assistant', reply);
     } catch (error) {
+      pending.remove();
       addChatMessage('system', `执行失败：${error}`);
       log(`对话执行失败: ${error}`, 'error');
     }
-  });
+  }, { progress: true });
 }
 
 function setupTabs() {
@@ -428,34 +462,28 @@ function setupTabs() {
 
 function setupLauncherActions() {
   $('btn-launch').onclick = () => withBusy('btn-launch', '重启中...', async () => {
-    setProgress(40);
     try {
       await invoke('launch_openclaw');
-      setProgress(100);
     } catch (error) {
       setProgress(0);
       log(`重启失败: ${error}`, 'error');
     }
-  }, { refreshEnv: true });
+  }, { refreshEnv: true, progress: true });
 
   $('btn-refresh-status').onclick = () => withBusy('btn-refresh-status', '刷新中...', async () => {
-    setProgress(35);
     await checkEnv();
-    setProgress(100);
     log('状态已刷新', 'success');
-  });
+  }, { progress: true });
 
   $('btn-doctor-fix').onclick = () => withBusy('btn-doctor-fix', '修复中...', async () => {
-    setProgress(35);
     try {
       const result = await openclaw(['doctor', '--fix']);
-      setProgress(100);
       log(result.output || '修复完成', result.success ? 'success' : 'warn');
     } catch (error) {
       setProgress(0);
       log(`一键修复失败: ${error}`, 'error');
     }
-  }, { refreshEnv: true });
+  }, { refreshEnv: true, progress: true });
 
   $('btn-dashboard').onclick = () => withBusy('btn-dashboard', '打开中...', async () => {
     try {
@@ -466,39 +494,33 @@ function setupLauncherActions() {
   });
 
   $('btn-install-node').onclick = () => withBusy('btn-install-node', '安装中...', async () => {
-    setProgress(35);
     try {
       await invoke('install_node');
-      setProgress(100);
     } catch (error) {
       setProgress(0);
       log(`安装 Node.js 失败: ${error}`, 'error');
     }
-  }, { refreshEnv: true });
+  }, { refreshEnv: true, progress: true });
 
   $('btn-install-oc').onclick = () => withBusy('btn-install-oc', '安装中...', async () => {
-    setProgress(35);
     try {
       await invoke('install_openclaw');
-      setProgress(100);
     } catch (error) {
       setProgress(0);
       log(`安装 OpenClaw 失败: ${error}`, 'error');
     }
-  }, { refreshEnv: true });
+  }, { refreshEnv: true, progress: true });
 
   $('btn-uninstall').onclick = () => {
     if (!confirm('确定卸载 OpenClaw CLI？')) return;
     void withBusy('btn-uninstall', '卸载中...', async () => {
-      setProgress(35);
       try {
         await invoke('uninstall_openclaw');
-        setProgress(100);
       } catch (error) {
         setProgress(0);
         log(`卸载失败: ${error}`, 'error');
       }
-    }, { refreshEnv: true });
+    }, { refreshEnv: true, progress: true });
   };
 }
 
