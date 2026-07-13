@@ -18,34 +18,46 @@ interface CommandResult {
   output: string;
 }
 
-interface GatewayAgentResult {
-  output: string;
-}
-
-interface Flow {
+interface ProviderModel {
+  id: string;
   name: string;
-  prompt: string;
 }
 
-interface SlashCommand {
-  name: string;
-  description: string;
-  value: string;
+interface ProviderConfig {
+  id: string;
+  base_url: string;
+  api_key: string;
+  api: string;
+  models: ProviderModel[];
+  active: boolean;
+  use_full_path: boolean;
 }
 
-const FLOW_STORAGE_KEY = 'openclaw-launcher.flows';
+interface OpenClawUpdateStatus {
+  availability?: {
+    available?: boolean;
+    latestVersion?: string | null;
+  };
+  update?: {
+    registry?: {
+      latestVersion?: string | null;
+    };
+  };
+}
+
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 const logArea = $('log-area');
 const progressFill = $('progress-fill');
-const chatHistory = $('chat-history');
-const slashMenu = $('slash-menu');
 
 let envReady = false;
 let statusRefreshInFlight = false;
-let activeSlashIndex = 0;
 let progressTimer: number | null = null;
 let progressValue = 0;
+const busyButtons = new Set<string>();
+let currentProviders: ProviderConfig[] = [];
+let upstreamModels: ProviderModel[] = [];
+let upstreamModelsProviderId = '';
 
 function escapeHtml(value: string) {
   return value.replace(/[&<>"']/g, (char) => ({
@@ -68,15 +80,6 @@ function log(message: string, level = 'info') {
   line.innerHTML = `<span class="time">${time}</span>${escapeHtml(message)}`;
   logArea.appendChild(line);
   logArea.scrollTop = logArea.scrollHeight;
-}
-
-function addChatMessage(role: 'user' | 'assistant' | 'system', text: string) {
-  const message = document.createElement('div');
-  message.className = `message ${role}`;
-  message.textContent = text;
-  chatHistory.appendChild(message);
-  chatHistory.scrollTop = chatHistory.scrollHeight;
-  return message;
 }
 
 function setProgress(value: number) {
@@ -123,7 +126,8 @@ function updateStatus(env: EnvStatus) {
   $('btn-uninstall').toggleAttribute('disabled', !env.openclaw_installed);
 }
 
-async function checkEnv() {
+async function checkEnv(force = false) {
+  if (busyButtons.has('btn-refresh-status') && !force) return;
   if (statusRefreshInFlight) return;
   statusRefreshInFlight = true;
 
@@ -143,14 +147,16 @@ async function withBusy<T>(
   task: () => Promise<T>,
   options: { refreshEnv?: boolean; progress?: boolean } = {},
 ) {
+  if (busyButtons.has(buttonId)) {
+    log('该操作正在执行，请稍候', 'warn');
+    return undefined as T;
+  }
   const button = $(buttonId) as HTMLButtonElement;
   const originalText = button.textContent || '';
-  button.disabled = true;
+  busyButtons.add(buttonId);
   button.classList.add('busy');
   button.textContent = label;
-  if (options.progress) {
-    startProgress();
-  }
+  if (options.progress) startProgress();
 
   try {
     const result = await task();
@@ -164,10 +170,8 @@ async function withBusy<T>(
     }
     button.classList.remove('busy');
     button.textContent = originalText;
-    button.disabled = false;
-    if (options.refreshEnv) {
-      await checkEnv();
-    }
+    busyButtons.delete(buttonId);
+    if (options.refreshEnv) await checkEnv(true);
   }
 }
 
@@ -237,6 +241,11 @@ function inputValue(id: string) {
   return ($(id) as HTMLInputElement).value.trim();
 }
 
+function textValue(id: string) {
+  return ($(id) as HTMLTextAreaElement).value.trim();
+}
+
+/* Removed chat and flow implementation.
 function loadFlows(): Flow[] {
   try {
     const raw = localStorage.getItem(FLOW_STORAGE_KEY);
@@ -426,6 +435,10 @@ async function handleSlashCommand(raw: string) {
 }
 
 async function sendChat() {
+  if (busyButtons.has('btn-chat-send')) {
+    log('正在等待上一条对话响应，请稍候', 'warn');
+    return;
+  }
   const input = $('chat-input') as HTMLInputElement;
   const message = input.value.trim();
   if (!message) return;
@@ -448,6 +461,8 @@ async function sendChat() {
     }
   }, { progress: true });
 }
+
+*/
 
 function setupTabs() {
   document.querySelectorAll<HTMLButtonElement>('.tab').forEach((tab) => {
@@ -493,6 +508,32 @@ function setupLauncherActions() {
     }
   });
 
+  $('btn-check-update').onclick = () => withBusy('btn-check-update', '检查中...', async () => {
+    try {
+      const result = await openclaw(['update', 'status', '--json']);
+      if (!result.success) {
+        log(result.output || '检查更新失败', 'warn');
+        return;
+      }
+
+      const status = JSON.parse(result.output) as OpenClawUpdateStatus;
+      const latestVersion = status.availability?.latestVersion || status.update?.registry?.latestVersion || '最新版本';
+      if (!status.availability?.available) {
+        log(`OpenClaw 已是最新版本${latestVersion ? `：${latestVersion}` : ''}`, 'success');
+        return;
+      }
+
+      log(`检测到 OpenClaw 新版本：${latestVersion}`, 'warn');
+      if (!confirm(`检测到 OpenClaw 新版本：${latestVersion}\n是否立即升级？`)) return;
+
+      log('开始升级 OpenClaw...', 'info');
+      const updateResult = await openclaw(['update', '--yes']);
+      log(updateResult.output || 'OpenClaw 升级完成', updateResult.success ? 'success' : 'error');
+    } catch (error) {
+      log(`检查更新失败: ${error}`, 'error');
+    }
+  }, { refreshEnv: true, progress: true });
+
   $('btn-install-node').onclick = () => withBusy('btn-install-node', '安装中...', async () => {
     try {
       await invoke('install_node');
@@ -524,6 +565,7 @@ function setupLauncherActions() {
   };
 }
 
+/* Removed chat and flow setup.
 function setupChatActions() {
   $('btn-chat-send').onclick = () => void sendChat();
   $('chat-input').addEventListener('input', () => {
@@ -597,6 +639,8 @@ function setupFlowActions() {
   };
 }
 
+*/
+
 function setupAgentActions() {
   $('btn-agents-refresh').onclick = () => runOpenClaw(['agents', 'list'], 'agents-output', 'btn-agents-refresh');
   $('btn-agent-add').onclick = () => {
@@ -610,6 +654,202 @@ function setupAgentActions() {
     if (confirm(`确定删除 Agent "${name}"？`)) {
       void runOpenClaw(['agents', 'delete', name], 'agents-output', 'btn-agent-delete');
     }
+  };
+}
+
+function maskKey(value: string) {
+  if (!value) return '';
+  if (value.length <= 10) return '*'.repeat(value.length);
+  return `${value.slice(0, 4)}...${value.slice(-4)}`;
+}
+
+function parseProviderModels(): ProviderModel[] {
+  return textValue('provider-models')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [id, name] = line.split('|').map((item) => item.trim());
+      return { id, name: name || id };
+    });
+}
+
+function renderUpstreamModels() {
+  const picker = $('provider-model-picker');
+  const providerId = inputValue('provider-id');
+  picker.innerHTML = '';
+  if (!providerId || upstreamModelsProviderId !== providerId) return;
+
+  const configured = new Set(parseProviderModels().map((model) => model.id));
+  for (const model of upstreamModels) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = `model-chip${configured.has(model.id) ? ' selected' : ''}`;
+    chip.title = model.name;
+    chip.textContent = model.name === model.id ? model.id : `${model.name} (${model.id})`;
+    chip.onclick = () => {
+      const models = new Map(parseProviderModels().map((item) => [item.id, item]));
+      if (models.has(model.id)) models.delete(model.id);
+      else models.set(model.id, model);
+      ($('provider-models') as HTMLTextAreaElement).value = [...models.values()]
+        .map((item) => item.name === item.id ? item.id : `${item.id} | ${item.name}`)
+        .join('\n');
+      renderUpstreamModels();
+    };
+    picker.appendChild(chip);
+  }
+}
+
+function fillProviderForm(provider: ProviderConfig) {
+  ($('provider-id') as HTMLInputElement).value = provider.id;
+  ($('provider-base-url') as HTMLInputElement).value = provider.base_url;
+  ($('provider-api-key') as HTMLInputElement).value = provider.api_key;
+  ($('provider-api') as HTMLInputElement).value = provider.api || 'openai-completions';
+  ($('provider-use-full-path') as HTMLInputElement).checked = provider.use_full_path;
+  ($('provider-models') as HTMLTextAreaElement).value = provider.models
+    .map((model) => model.name && model.name !== model.id ? `${model.id} | ${model.name}` : model.id)
+    .join('\n');
+  renderUpstreamModels();
+}
+
+function renderProviders(providers: ProviderConfig[]) {
+  currentProviders = providers;
+  const output = $('providers-output');
+  const list = $('provider-list');
+  const selectedId = inputValue('provider-id');
+  if (providers.length === 0) {
+    list.innerHTML = '';
+    output.textContent = '暂无供应商。可手动添加，或从 ccswitch/Claude 配置导入。';
+    return;
+  }
+  output.textContent = providers.map((provider) => [
+    `${provider.active ? '●' : '○'} ${provider.id}`,
+    `  Base URL: ${provider.base_url || '(未配置)'}`,
+    `  API: ${provider.api || '(默认)'}`,
+    `  API Key: ${maskKey(provider.api_key) || '(未配置)'}`,
+    `  Models: ${provider.models.map((model) => model.id).join(', ') || '(未配置)'}`,
+  ].join('\n')).join('\n\n');
+
+  const currentId = inputValue('provider-id');
+  const selected = providers.find((provider) => provider.id === currentId)
+    || providers.find((provider) => provider.active)
+    || providers[0];
+  if (selected) fillProviderForm(selected);
+  list.innerHTML = '';
+  for (const provider of providers) {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = `provider-card${provider.active ? ' active' : ''}${provider.id === selected.id ? ' selected' : ''}`;
+    const title = document.createElement('div');
+    title.className = 'provider-card-title';
+    title.textContent = `${provider.active ? '已启用  ' : ''}${provider.id}`;
+    const details = document.createElement('div');
+    details.className = 'provider-card-meta';
+    details.textContent = `${provider.models.map((model) => model.id).join(', ') || '未配置模型'}\n${provider.base_url || '未配置 Base URL'}`;
+    card.append(title, details);
+    card.onclick = () => {
+      fillProviderForm(provider);
+      renderProviders(currentProviders);
+    };
+    list.appendChild(card);
+  }
+}
+
+async function refreshProviders() {
+  const providers = await invoke<ProviderConfig[]>('list_providers');
+  renderProviders(providers);
+}
+
+function providerFromForm(active = false): ProviderConfig {
+  return {
+    id: inputValue('provider-id'),
+    base_url: inputValue('provider-base-url'),
+    api_key: inputValue('provider-api-key'),
+    api: inputValue('provider-api') || 'openai-completions',
+    models: parseProviderModels(),
+    active,
+    use_full_path: ($('provider-use-full-path') as HTMLInputElement).checked,
+  };
+}
+
+function setupProviderActions() {
+  $('provider-models').addEventListener('input', renderUpstreamModels);
+  $('btn-provider-new').onclick = () => {
+    ($('provider-id') as HTMLInputElement).value = '';
+    ($('provider-base-url') as HTMLInputElement).value = '';
+    ($('provider-api-key') as HTMLInputElement).value = '';
+    ($('provider-api') as HTMLInputElement).value = 'openai-completions';
+    ($('provider-use-full-path') as HTMLInputElement).checked = false;
+    ($('provider-models') as HTMLTextAreaElement).value = '';
+    upstreamModels = [];
+    upstreamModelsProviderId = '';
+    renderUpstreamModels();
+    ($('provider-id') as HTMLInputElement).focus();
+  };
+  $('btn-provider-fetch-models').onclick = () => withBusy('btn-provider-fetch-models', '获取中...', async () => {
+    try {
+      const provider = providerFromForm(false);
+      if (!provider.base_url) {
+        log('请先填写 Base URL，再获取模型', 'warn');
+        return;
+      }
+      upstreamModels = await invoke<ProviderModel[]>('fetch_provider_models', { provider });
+      upstreamModelsProviderId = provider.id;
+      renderUpstreamModels();
+      log(`已从上游获取 ${upstreamModels.length} 个模型，点击即可配置`, 'success');
+    } catch (error) {
+      log(`获取上游模型失败: ${error}`, 'error');
+    }
+  }, { progress: true });
+  $('btn-providers-refresh').onclick = () => withBusy('btn-providers-refresh', '刷新中...', async () => {
+    await refreshProviders();
+  }, { progress: true });
+
+  $('btn-providers-import').onclick = () => withBusy('btn-providers-import', '导入中...', async () => {
+    try {
+      const existing = new Set(currentProviders.map((provider) => provider.id));
+      const providers = await invoke<ProviderConfig[]>('import_ccswitch_providers');
+      renderProviders(providers);
+      const added = providers.filter((provider) => !existing.has(provider.id)).length;
+      log(`已从 ccswitch/Claude 配置导入，新增 ${added} 个供应商`, 'success');
+    } catch (error) {
+      log(`导入失败: ${error}`, 'error');
+    }
+  }, { progress: true });
+
+  $('btn-provider-save').onclick = () => withBusy('btn-provider-save', '保存中...', async () => {
+    try {
+      const providers = await invoke<ProviderConfig[]>('save_provider', { provider: providerFromForm(false) });
+      renderProviders(providers);
+      log('供应商已保存并同步到 OpenClaw 配置', 'success');
+    } catch (error) {
+      log(`保存供应商失败: ${error}`, 'error');
+    }
+  }, { progress: true });
+
+  $('btn-provider-activate').onclick = () => withBusy('btn-provider-activate', '启用中...', async () => {
+    try {
+      const providers = await invoke<ProviderConfig[]>('save_provider', { provider: providerFromForm(true) });
+      renderProviders(providers);
+      log('供应商已启用，建议重启 Gateway 生效', 'success');
+    } catch (error) {
+      log(`启用供应商失败: ${error}`, 'error');
+    }
+  }, { progress: true });
+
+  $('btn-provider-delete').onclick = () => {
+    const id = inputValue('provider-id');
+    if (!id) return log('请输入要删除的供应商 ID', 'warn');
+    if (!confirm(`确定删除供应商 "${id}"？会同步删除对应模型别名。`)) return;
+    void withBusy('btn-provider-delete', '删除中...', async () => {
+      try {
+        const providers = await invoke<ProviderConfig[]>('delete_provider', { id });
+        renderProviders(providers);
+        log('供应商已删除', 'success');
+      } catch (error) {
+        log(`删除供应商失败: ${error}`, 'error');
+      }
+    }, { progress: true });
   };
 }
 
@@ -676,12 +916,11 @@ void listen<{ text: string; level: string }>('log', (event) => {
 
 setupTabs();
 setupLauncherActions();
-setupChatActions();
-setupFlowActions();
+setupProviderActions();
 setupAgentActions();
 setupSkillActions();
 setupTaskActions();
 setupWindowActions();
-renderFlows();
+void refreshProviders();
 void checkEnv();
 window.setInterval(checkEnv, 30000);

@@ -29,7 +29,7 @@
       background: #161b22;
     }
     .brand { font-weight: 700; color: #58a6ff; }
-    .window-actions { display: flex; gap: 6px; }
+    .window-actions { display: none; }
     .icon-btn {
       width: 32px;
       height: 28px;
@@ -67,6 +67,11 @@
       display: grid;
       grid-template-rows: auto 1fr;
       gap: 14px;
+    }
+    .app-busy .sidebar,
+    .app-busy .content {
+      pointer-events: none;
+      opacity: .72;
     }
     .panel { display: none; min-height: 0; }
     .panel.active { display: grid; gap: 14px; grid-template-rows: auto 1fr; }
@@ -119,7 +124,7 @@
     .primary { background: #1f6feb; border-color: #1f6feb; }
     .danger { color: #f85149; border-color: #da3633; }
     .danger:hover:not(:disabled) { background: #da3633; color: #fff; }
-    input, textarea {
+    input:not([type="checkbox"]), textarea, select {
       flex: 1;
       min-width: 180px;
       padding: 10px 12px;
@@ -129,7 +134,10 @@
       color: #e6edf3;
       outline: none;
     }
-    input:focus, textarea:focus { border-color: #58a6ff; }
+    input:not([type="checkbox"]):focus, textarea:focus, select:focus { border-color: #58a6ff; }
+    select { color-scheme: dark; cursor: pointer; }
+    .checkbox-label { display: inline-flex; align-items: center; gap: 7px; min-height: 38px; color: #c9d1d9; font-size: 12px; white-space: nowrap; }
+    .checkbox-label input { width: 16px; height: 16px; margin: 0; accent-color: #58a6ff; }
     textarea {
       width: 100%;
       min-height: 96px;
@@ -152,58 +160,15 @@
     .time { margin-right: 8px; color: #6e7681; }
     .progress { height: 4px; overflow: hidden; border-radius: 999px; background: #21262d; }
     .progress > div { width: 0; height: 100%; background: #58a6ff; transition: width .2s ease; }
-    .chat-history {
-      min-height: 0;
-      overflow: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      padding: 12px;
-      border: 1px solid #30363d;
-      border-radius: 12px;
-      background: #0d1117;
-    }
-    .message {
-      padding: 10px 12px;
-      border: 1px solid #30363d;
-      border-radius: 12px;
-      white-space: pre-wrap;
-      font-size: 12px;
-      line-height: 1.55;
-    }
-    .message.user { align-self: flex-end; max-width: 82%; background: #1f6feb; border-color: #1f6feb; }
-    .message.assistant { align-self: flex-start; max-width: 92%; background: #161b22; }
-    .message.system { align-self: center; max-width: 92%; color: #8b949e; background: transparent; }
-    .chat-toolbar { position: relative; }
-    .slash-menu {
-      position: absolute;
-      left: 0;
-      right: 150px;
-      top: 42px;
-      z-index: 10;
-      display: none;
-      max-height: 260px;
-      overflow: auto;
-      padding: 6px;
-      border: 1px solid #30363d;
-      border-radius: 12px;
-      background: #161b22;
-      box-shadow: 0 16px 40px rgba(0, 0, 0, .35);
-    }
-    .slash-menu.open { display: block; }
-    .slash-item {
-      width: 100%;
-      padding: 8px 10px;
-      border: 0;
-      border-radius: 9px;
-      background: transparent;
-      color: #c9d1d9;
-      text-align: left;
-      cursor: pointer;
-    }
-    .slash-item:hover, .slash-item.active { background: #21262d; color: #fff; }
-    .slash-name { font-weight: 700; color: #58a6ff; }
-    .slash-desc { margin-top: 3px; color: #8b949e; font-size: 11px; }
+    .provider-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+    .provider-card { min-height: 104px; padding: 10px; border: 1px solid #30363d; border-radius: 7px; background: #161b22; color: #c9d1d9; text-align: left; cursor: pointer; }
+    .provider-card:hover, .provider-card.selected { border-color: #58a6ff; background: #1c2735; }
+    .provider-card.active { box-shadow: inset 3px 0 #3fb950; }
+    .provider-card-title { font-weight: 700; color: #f0f6fc; }
+    .provider-card-meta { margin-top: 6px; color: #8b949e; font: 11px/1.45 "Cascadia Code", Consolas, monospace; overflow-wrap: anywhere; }
+    .model-picker { display: flex; flex-wrap: wrap; gap: 6px; min-height: 30px; padding: 8px 0; }
+    .model-chip { padding: 5px 8px; border: 1px solid #30363d; border-radius: 6px; background: #161b22; color: #c9d1d9; font: 11px "Cascadia Code", Consolas, monospace; cursor: pointer; }
+    .model-chip:hover, .model-chip.selected { border-color: #58a6ff; background: #1c2735; color: #f0f6fc; }
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
@@ -220,8 +185,7 @@
     <div class="layout">
       <aside class="sidebar">
         <button class="tab active" data-tab="launcher">启动器</button>
-        <button class="tab" data-tab="chat">对话</button>
-        <button class="tab" data-tab="flows">流程</button>
+        <button class="tab" data-tab="providers">供应商</button>
         <button class="tab" data-tab="agents">Agents 管理</button>
         <button class="tab" data-tab="skills">Skills 管理</button>
         <button class="tab" data-tab="tasks">定时任务</button>
@@ -245,6 +209,7 @@
               <button class="btn" id="btn-refresh-status">刷新状态</button>
               <button class="btn" id="btn-doctor-fix">一键修复</button>
               <button class="btn" id="btn-dashboard">打开界面</button>
+              <button class="btn" id="btn-check-update">检查更新</button>
               <button class="btn" id="btn-install-node" disabled>安装 Node.js</button>
               <button class="btn" id="btn-install-oc" disabled>安装 OpenClaw</button>
               <button class="btn danger" id="btn-uninstall" disabled>卸载 OpenClaw</button>
@@ -252,26 +217,33 @@
           </div>
         </section>
 
-        <section class="panel" id="panel-chat">
-          <div class="toolbar chat-toolbar">
-            <input id="chat-input" placeholder="输入消息，或输入 /help 查看可用命令" />
-            <button class="btn primary" id="btn-chat-send">发送</button>
-            <button class="btn" id="btn-chat-clear">清空</button>
-            <div class="slash-menu" id="slash-menu"></div>
-          </div>
-          <div class="chat-history" id="chat-history">
-            <div class="message system">普通输入会发送给 OpenClaw Agent；以 / 开头会执行内置命令或流程。</div>
-          </div>
-        </section>
-
-        <section class="panel" id="panel-flows">
+        <section class="panel" id="panel-providers">
           <div class="toolbar">
-            <input id="flow-name" placeholder="流程名，例如 weekly-report，使用 /weekly-report 调用" />
-            <button class="btn primary" id="btn-flow-save">保存流程</button>
-            <button class="btn danger" id="btn-flow-delete">删除流程</button>
+            <button class="btn primary" id="btn-providers-refresh">刷新供应商</button>
+            <button class="btn" id="btn-providers-import">从 ccswitch 导入</button>
+            <button class="btn" id="btn-provider-new">新建</button>
+            <button class="btn" id="btn-provider-fetch-models">获取模型</button>
+            <button class="btn" id="btn-provider-save">保存/联动</button>
+            <button class="btn" id="btn-provider-activate">启用</button>
+            <button class="btn danger" id="btn-provider-delete">删除</button>
           </div>
-          <textarea id="flow-prompt" placeholder="流程提示词。可用 {{input}} 引用 /流程名 后面的文本。"></textarea>
-          <pre id="flows-output">流程保存在本机。输入 /help 可以看到内置命令和自定义流程。</pre>
+          <div class="toolbar">
+            <input id="provider-id" placeholder="供应商 ID，例如 deepseek / openai" />
+            <input id="provider-base-url" placeholder="Base URL，例如 https://api.openai.com/v1" />
+            <input id="provider-api-key" placeholder="API Key" />
+            <select id="provider-api" aria-label="API 类型">
+              <option value="openai-completions">OpenAI Completions</option>
+              <option value="openai-responses">OpenAI Responses</option>
+              <option value="anthropic-messages">Anthropic Messages</option>
+              <option value="google-generative-ai">Google Generative AI</option>
+              <option value="bedrock-converse-stream">AWS Bedrock</option>
+            </select>
+            <label class="checkbox-label"><input id="provider-use-full-path" type="checkbox" /> 使用完整接口路径</label>
+          </div>
+          <textarea id="provider-models" placeholder="模型列表，每行一个：模型ID 或 模型ID | 显示名"></textarea>
+          <div class="model-picker" id="provider-model-picker"></div>
+          <div class="provider-list" id="provider-list"></div>
+          <pre id="providers-output">点击“刷新供应商”查看 OpenClaw 当前供应商。保存会写入 ~/.openclaw/openclaw.json 并同步 Agents 默认模型。</pre>
         </section>
 
         <section class="panel" id="panel-agents">
