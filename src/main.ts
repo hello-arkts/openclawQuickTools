@@ -1,6 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 
 interface EnvStatus {
   node_installed: boolean;
@@ -45,6 +44,66 @@ interface OpenClawUpdateStatus {
   };
 }
 
+interface CronJob {
+  id: string;
+  name?: string;
+  description?: string;
+  enabled?: boolean;
+  status?: string;
+  schedule?: {
+    kind?: string;
+    expr?: string;
+    every?: string;
+    at?: string;
+    tz?: string;
+  };
+  payload?: {
+    message?: string;
+    command?: string;
+  };
+  state?: {
+    nextRunAtMs?: number;
+    lastRunAtMs?: number;
+    lastRunStatus?: string;
+  };
+}
+
+interface CronListResult {
+  jobs?: CronJob[];
+  total?: number;
+}
+
+interface SkillEntry {
+  name: string;
+  description?: string;
+  eligible?: boolean;
+  disabled?: boolean;
+  source?: string;
+  bundled?: boolean;
+  userInvocable?: boolean;
+  commandVisible?: boolean;
+  missing?: {
+    bins?: string[];
+    anyBins?: string[];
+    env?: string[];
+    config?: string[];
+    os?: string[];
+  };
+}
+
+interface SkillListResult {
+  skills?: SkillEntry[];
+}
+
+interface AgentEntry {
+  id: string;
+  workspace?: string;
+  agent_dir?: string;
+  model?: string;
+  bindings?: number;
+  is_default?: boolean;
+}
+
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 const logArea = $('log-area');
@@ -58,6 +117,11 @@ const busyButtons = new Set<string>();
 let currentProviders: ProviderConfig[] = [];
 let upstreamModels: ProviderModel[] = [];
 let upstreamModelsProviderId = '';
+let currentTasks: CronJob[] = [];
+let selectedTaskId = '';
+let currentSkills: SkillEntry[] = [];
+let selectedSkillName = '';
+let currentAgents: AgentEntry[] = [];
 
 function escapeHtml(value: string) {
   return value.replace(/[&<>"']/g, (char) => ({
@@ -121,6 +185,7 @@ function updateStatus(env: EnvStatus) {
   setStatus('st-gw', env.gateway_running ? '运行中' : '未运行', env.gateway_running ? 'ok' : 'warn');
 
   $('btn-launch').toggleAttribute('disabled', !env.openclaw_installed);
+  $('btn-stop-openclaw').toggleAttribute('disabled', !env.openclaw_installed || !env.gateway_running);
   $('btn-install-node').toggleAttribute('disabled', env.node_installed);
   $('btn-install-oc').toggleAttribute('disabled', env.openclaw_installed || !env.node_installed);
   $('btn-uninstall').toggleAttribute('disabled', !env.openclaw_installed);
@@ -471,6 +536,7 @@ function setupTabs() {
       document.querySelectorAll('.panel').forEach((item) => item.classList.remove('active'));
       tab.classList.add('active');
       $(`panel-${tab.dataset.tab}`).classList.add('active');
+      if (tab.dataset.tab === 'agents') void refreshAgents();
     };
   });
 }
@@ -482,6 +548,16 @@ function setupLauncherActions() {
     } catch (error) {
       setProgress(0);
       log(`重启失败: ${error}`, 'error');
+    }
+  }, { refreshEnv: true, progress: true });
+
+  $('btn-stop-openclaw').onclick = () => withBusy('btn-stop-openclaw', '停止中...', async () => {
+    try {
+      await invoke('stop_openclaw');
+      log('OpenClaw 已停止', 'success');
+    } catch (error) {
+      setProgress(0);
+      log(`停止 OpenClaw 失败: ${error}`, 'error');
     }
   }, { refreshEnv: true, progress: true });
 
@@ -641,18 +717,63 @@ function setupFlowActions() {
 
 */
 
+function renderAgents(agents: AgentEntry[]) {
+  currentAgents = agents;
+  const list = $('agent-list');
+  list.innerHTML = '';
+  if (agents.length === 0) {
+    list.innerHTML = '<div class="agent-card">未发现已安装的 Agent</div>';
+    return;
+  }
+
+  for (const agent of agents) {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = `agent-card${inputValue('agent-name') === agent.id ? ' selected' : ''}`;
+    card.innerHTML = `<strong>${escapeHtml(agent.id)}</strong><span>${escapeHtml(agent.model || '未设置模型')}</span><span>${escapeHtml(agent.workspace || agent.agent_dir || '')}</span>${agent.is_default ? '<em>默认 Agent</em>' : ''}`;
+    card.onclick = () => {
+      ($('agent-name') as HTMLInputElement).value = agent.id;
+      renderAgents(currentAgents);
+    };
+    list.appendChild(card);
+  }
+}
+
+async function refreshAgents() {
+  const output = $('agents-output');
+  try {
+    const agents = await invoke<AgentEntry[]>('list_agents');
+    renderAgents(agents);
+    output.textContent = agents.length ? `已加载 ${agents.length} 个 Agent。点击卡片可选择后删除。` : '未发现已安装的 Agent。';
+  } catch (error) {
+    output.textContent = String(error);
+    log(`读取 Agents 失败: ${error}`, 'error');
+  }
+}
+
 function setupAgentActions() {
-  $('btn-agents-refresh').onclick = () => runOpenClaw(['agents', 'list'], 'agents-output', 'btn-agents-refresh');
+  $('btn-agents-refresh').onclick = () => withBusy('btn-agents-refresh', '刷新中...', refreshAgents, { progress: true });
   $('btn-agent-add').onclick = () => {
     const name = inputValue('agent-name');
     if (!name) return log('请输入 Agent 名称', 'warn');
-    void runOpenClaw(['agents', 'add', name], 'agents-output', 'btn-agent-add');
+    void withBusy('btn-agent-add', '添加中...', async () => {
+      const result = await openclaw(['agents', 'add', name]);
+      $('agents-output').textContent = result.output || (result.success ? 'Agent 已添加。' : '添加 Agent 失败。');
+      if (result.success) await refreshAgents();
+    }, { progress: true });
   };
   $('btn-agent-delete').onclick = () => {
     const name = inputValue('agent-name');
     if (!name) return log('请输入要删除的 Agent 名称', 'warn');
     if (confirm(`确定删除 Agent "${name}"？`)) {
-      void runOpenClaw(['agents', 'delete', name], 'agents-output', 'btn-agent-delete');
+      void withBusy('btn-agent-delete', '删除中...', async () => {
+        const result = await openclaw(['agents', 'delete', name]);
+        $('agents-output').textContent = result.output || (result.success ? 'Agent 已删除。' : '删除 Agent 失败。');
+        if (result.success) {
+          ($('agent-name') as HTMLInputElement).value = '';
+          await refreshAgents();
+        }
+      }, { progress: true });
     }
   };
 }
@@ -853,8 +974,92 @@ function setupProviderActions() {
   };
 }
 
+function skillMissingSummary(skill: SkillEntry) {
+  const missing = skill.missing;
+  if (!missing) return '';
+  const parts = [
+    ...(missing.bins || []).map((item) => `bin:${item}`),
+    ...(missing.env || []).map((item) => `env:${item}`),
+    ...(missing.config || []).map((item) => `config:${item}`),
+    ...(missing.os || []).map((item) => `os:${item}`),
+  ];
+  return parts.join(', ');
+}
+
+function clearSkillSelection() {
+  selectedSkillName = '';
+  ($('skill-query') as HTMLInputElement).value = '';
+  ($('skill-selected') as HTMLInputElement).value = '';
+  renderSkills(currentSkills);
+}
+
+function fillSkillSelection(skill: SkillEntry) {
+  selectedSkillName = skill.name;
+  ($('skill-query') as HTMLInputElement).value = skill.name;
+  ($('skill-selected') as HTMLInputElement).value = skill.name;
+  renderSkills(currentSkills);
+  $('skills-output').textContent = [
+    `${skill.name}`,
+    '',
+    skill.description || '(无描述)',
+    '',
+    `来源: ${skill.source || '(未知)'}`,
+    `状态: ${skill.eligible ? '可用' : '不可用'}${skill.disabled ? ' / 已禁用' : ''}`,
+    `内置: ${skill.bundled ? '是' : '否'}`,
+    skillMissingSummary(skill) ? `缺失: ${skillMissingSummary(skill)}` : '',
+  ].filter(Boolean).join('\n');
+}
+
+function renderSkills(skills: SkillEntry[]) {
+  currentSkills = skills;
+  const list = $('skill-list');
+  list.innerHTML = '';
+  if (skills.length === 0) {
+    list.innerHTML = '<div class="skill-card disabled">暂无 Skills</div>';
+    return;
+  }
+
+  for (const skill of skills) {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = `skill-card${skill.name === selectedSkillName ? ' selected' : ''}${skill.eligible ? '' : ' disabled'}`;
+    const title = document.createElement('div');
+    title.className = 'skill-card-title';
+    const name = document.createElement('span');
+    name.textContent = skill.name;
+    const pill = document.createElement('span');
+    pill.className = `skill-pill${skill.eligible ? ' ready' : ''}${!skill.bundled ? ' local' : ''}`;
+    pill.textContent = skill.bundled ? (skill.eligible ? '可用' : '内置') : '本地';
+    title.append(name, pill);
+
+    const desc = document.createElement('div');
+    desc.className = 'skill-card-desc';
+    desc.textContent = skill.description || '(无描述)';
+    const meta = document.createElement('div');
+    meta.className = 'skill-card-meta';
+    meta.textContent = `${skill.source || 'unknown'}${skill.disabled ? ' / disabled' : ''}`;
+
+    card.append(title, desc, meta);
+    card.onclick = () => fillSkillSelection(skill);
+    list.appendChild(card);
+  }
+}
+
+async function refreshSkills() {
+  const result = await openclaw(['skills', 'list', '--json']);
+  if (!result.success) {
+    $('skills-output').textContent = result.output || '刷新 Skills 失败';
+    log('刷新 Skills 失败', 'error');
+    return;
+  }
+  const parsed = JSON.parse(result.output) as SkillListResult;
+  renderSkills(parsed.skills || []);
+  $('skills-output').textContent = `共 ${parsed.skills?.length || 0} 个 Skills。选中左侧 Skill 后可以查看详情、安装或移除非内置 Skill。`;
+}
+
 function setupSkillActions() {
-  $('btn-skills-refresh').onclick = () => runOpenClaw(['skills', 'list'], 'skills-output', 'btn-skills-refresh');
+  $('btn-skills-refresh').onclick = () => withBusy('btn-skills-refresh', '刷新中...', refreshSkills, { progress: true });
+  $('btn-skill-clear').onclick = clearSkillSelection;
   $('btn-skill-info').onclick = () => {
     const query = inputValue('skill-query');
     if (!query) return log('请输入 Skill 名称', 'warn');
@@ -868,45 +1073,185 @@ function setupSkillActions() {
   $('btn-skill-install').onclick = () => {
     const query = inputValue('skill-query');
     if (!query) return log('请输入要安装的 Skill 名称或来源', 'warn');
-    void runOpenClaw(['skills', 'install', query], 'skills-output', 'btn-skill-install');
+    void withBusy('btn-skill-install', '安装中...', async () => {
+      const result = await openclaw(['skills', 'install', query]);
+      $('skills-output').textContent = result.output || '安装完成';
+      log(result.success ? 'Skill 安装完成' : 'Skill 安装失败', result.success ? 'success' : 'error');
+      if (result.success) await refreshSkills();
+    }, { progress: true });
+  };
+  $('btn-skill-remove').onclick = () => {
+    const query = inputValue('skill-query');
+    if (!query) return log('请先选择要移除的 Skill', 'warn');
+    const skill = currentSkills.find((item) => item.name === query);
+    if (skill?.bundled) return log('内置 Skill 不能移除', 'warn');
+    if (!confirm(`确定移除 Skill "${query}"？此操作会删除本地 Skill 目录。`)) return;
+    void withBusy('btn-skill-remove', '移除中...', async () => {
+      try {
+        const removedPath = await invoke<string>('remove_skill', { name: query });
+        $('skills-output').textContent = `已移除 Skill: ${query}\n${removedPath}`;
+        log(`Skill 已移除: ${query}`, 'success');
+        clearSkillSelection();
+        await refreshSkills();
+      } catch (error) {
+        log(`移除 Skill 失败: ${error}`, 'error');
+      }
+    }, { progress: true });
   };
 }
 
+function formatTaskTime(value?: number) {
+  if (!value) return '未计划';
+  return new Date(value).toLocaleString('zh-CN', { hour12: false });
+}
+
+function taskScheduleText(job: CronJob) {
+  const schedule = job.schedule || {};
+  if (schedule.kind === 'cron') return `${schedule.expr || ''}${schedule.tz ? ` (${schedule.tz})` : ''}`;
+  if (schedule.kind === 'at') return schedule.at || schedule.expr || '';
+  return schedule.every || schedule.expr || '';
+}
+
+function taskMessage(job: CronJob) {
+  return job.payload?.message || job.payload?.command || '';
+}
+
+function clearTaskForm() {
+  selectedTaskId = '';
+  ($('task-id') as HTMLInputElement).value = '';
+  ($('task-name') as HTMLInputElement).value = '';
+  ($('task-description') as HTMLInputElement).value = '';
+  ($('task-schedule-kind') as HTMLSelectElement).value = 'every';
+  ($('task-schedule-value') as HTMLInputElement).value = '';
+  ($('task-message') as HTMLTextAreaElement).value = '';
+  renderTasks(currentTasks);
+}
+
+function fillTaskForm(job: CronJob) {
+  selectedTaskId = job.id;
+  ($('task-id') as HTMLInputElement).value = job.id;
+  ($('task-name') as HTMLInputElement).value = job.name || '';
+  ($('task-description') as HTMLInputElement).value = job.description || '';
+  const kind = job.schedule?.kind === 'cron' || job.schedule?.kind === 'at' ? job.schedule.kind : 'every';
+  ($('task-schedule-kind') as HTMLSelectElement).value = kind;
+  ($('task-schedule-value') as HTMLInputElement).value = taskScheduleText(job);
+  ($('task-message') as HTMLTextAreaElement).value = taskMessage(job);
+  renderTasks(currentTasks);
+}
+
+function renderTasks(tasks: CronJob[]) {
+  currentTasks = tasks;
+  const list = $('task-list');
+  list.innerHTML = '';
+  if (tasks.length === 0) {
+    list.innerHTML = '<div class="task-card disabled">暂无定时任务</div>';
+    $('tasks-output').textContent = '暂无定时任务。填写右侧表单后保存即可创建。';
+    return;
+  }
+
+  for (const job of tasks) {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = `task-card${job.id === selectedTaskId ? ' selected' : ''}${job.enabled === false ? ' disabled' : ''}`;
+    const title = document.createElement('div');
+    title.className = 'task-card-title';
+    const name = document.createElement('span');
+    name.textContent = job.name || job.id;
+    const status = document.createElement('span');
+    status.className = `task-pill${job.enabled !== false ? ' on' : ''}`;
+    status.textContent = job.enabled === false ? '停用' : (job.status || '启用');
+    title.append(name, status);
+
+    const meta = document.createElement('div');
+    meta.className = 'task-card-meta';
+    meta.textContent = [
+      taskScheduleText(job) || '未配置调度',
+      `下次：${formatTaskTime(job.state?.nextRunAtMs)}`,
+      job.id,
+    ].join('\n');
+
+    card.append(title, meta);
+    card.onclick = () => {
+      fillTaskForm(job);
+      $('tasks-output').textContent = JSON.stringify(job, null, 2);
+    };
+    list.appendChild(card);
+  }
+}
+
+async function refreshTasks() {
+  const output = $('tasks-output');
+  const result = await openclaw(['cron', 'list', '--all', '--json']);
+  if (!result.success) {
+    output.textContent = result.output || '刷新任务失败';
+    log('刷新定时任务失败', 'error');
+    return;
+  }
+  const parsed = JSON.parse(result.output) as CronListResult;
+  renderTasks(parsed.jobs || []);
+  output.textContent = `共 ${parsed.total ?? parsed.jobs?.length ?? 0} 个定时任务。选中任务后可以编辑、立即运行或移除。`;
+}
+
+function taskScheduleArgs() {
+  const kind = inputValue('task-schedule-kind');
+  const value = inputValue('task-schedule-value');
+  if (!value) return null;
+  if (kind === 'cron') return ['--cron', value];
+  if (kind === 'at') return ['--at', value];
+  return ['--every', value];
+}
+
 function setupTaskActions() {
-  $('btn-tasks-refresh').onclick = () => runOpenClaw(['cron', 'list', '--all'], 'tasks-output', 'btn-tasks-refresh');
+  $('btn-tasks-refresh').onclick = () => withBusy('btn-tasks-refresh', '刷新中...', refreshTasks, { progress: true });
   $('btn-tasks-status').onclick = () => runOpenClaw(['cron', 'status'], 'tasks-output', 'btn-tasks-status');
-  $('btn-task-add').onclick = () => {
+  $('btn-task-new').onclick = clearTaskForm;
+  $('btn-task-save').onclick = () => {
+    const id = inputValue('task-id');
     const name = inputValue('task-name');
-    const every = inputValue('task-every');
-    const message = inputValue('task-message');
+    const scheduleArgs = taskScheduleArgs();
+    const message = textValue('task-message');
+    const description = inputValue('task-description');
     if (!name) return log('请输入任务名称', 'warn');
-    if (!every) return log('请输入任务间隔，例如 1h 或 30m', 'warn');
+    if (!scheduleArgs) return log('请输入任务调度，例如 1h、30m 或 Cron 表达式', 'warn');
     if (!message) return log('请输入任务内容', 'warn');
-    void runOpenClaw(['cron', 'add', '--name', name, '--every', every, '--message', message], 'tasks-output', 'btn-task-add');
+
+    const args = id
+      ? ['cron', 'edit', id, '--name', name, ...scheduleArgs, '--message', message]
+      : ['cron', 'add', '--name', name, ...scheduleArgs, '--message', message];
+    if (description) args.push('--description', description);
+
+    void withBusy('btn-task-save', '保存中...', async () => {
+      const result = await openclaw(args);
+      $('tasks-output').textContent = result.output || (id ? '任务已编辑' : '任务已添加');
+      log(id ? '定时任务已编辑' : '定时任务已添加', result.success ? 'success' : 'error');
+      if (result.success) await refreshTasks();
+    }, { progress: true });
   };
   $('btn-task-run').onclick = () => {
     const id = inputValue('task-id');
-    if (!id) return log('请输入任务 ID', 'warn');
+    if (!id) return log('请先选择要运行的任务', 'warn');
     void runOpenClaw(['cron', 'run', id], 'tasks-output', 'btn-task-run');
   };
   $('btn-task-delete').onclick = () => {
     const id = inputValue('task-id');
-    if (!id) return log('请输入要删除的任务 ID', 'warn');
-    if (confirm(`确定删除定时任务 "${id}"？`)) {
-      void runOpenClaw(['cron', 'rm', id], 'tasks-output', 'btn-task-delete');
-    }
+    if (!id) return log('请先选择要移除的任务', 'warn');
+    const task = currentTasks.find((item) => item.id === id);
+    if (!confirm(`确定移除定时任务 "${task?.name || id}"？`)) return;
+    void withBusy('btn-task-delete', '移除中...', async () => {
+      const result = await openclaw(['cron', 'rm', id]);
+      $('tasks-output').textContent = result.output || '任务已移除';
+      log('定时任务已移除', result.success ? 'success' : 'error');
+      if (result.success) {
+        clearTaskForm();
+        await refreshTasks();
+      }
+    }, { progress: true });
   };
 }
 
 function setupWindowActions() {
   $('btn-clear-log').onclick = () => {
     logArea.textContent = '等待操作...';
-  };
-  $('btn-min').onclick = () => {
-    void getCurrentWindow().minimize();
-  };
-  $('btn-close').onclick = async () => {
-    await invoke('close_window');
   };
 }
 

@@ -21,26 +21,11 @@
       background: linear-gradient(135deg, #0d1117, #161b22);
     }
     .titlebar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
       padding: 10px 14px;
       border-bottom: 1px solid #30363d;
       background: #161b22;
     }
     .brand { font-weight: 700; color: #58a6ff; }
-    .window-actions { display: none; }
-    .icon-btn {
-      width: 32px;
-      height: 28px;
-      border: 1px solid #30363d;
-      border-radius: 7px;
-      background: #21262d;
-      color: #c9d1d9;
-      cursor: pointer;
-    }
-    .icon-btn:hover { border-color: #58a6ff; }
-    .icon-btn.close:hover { background: #da3633; border-color: #da3633; color: #fff; }
     .layout { min-height: 0; display: grid; grid-template-columns: 190px 1fr; }
     .sidebar {
       padding: 16px;
@@ -75,6 +60,7 @@
     }
     .panel { display: none; min-height: 0; }
     .panel.active { display: grid; gap: 14px; grid-template-rows: auto 1fr; }
+    #panel-agents.active { grid-template-rows: auto minmax(120px, 1fr) auto; }
     .status-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
     .card {
       padding: 14px;
@@ -164,11 +150,40 @@
     .provider-card { min-height: 104px; padding: 10px; border: 1px solid #30363d; border-radius: 7px; background: #161b22; color: #c9d1d9; text-align: left; cursor: pointer; }
     .provider-card:hover, .provider-card.selected { border-color: #58a6ff; background: #1c2735; }
     .provider-card.active { box-shadow: inset 3px 0 #3fb950; }
+    .agent-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; align-content: start; overflow: auto; }
+    .agent-card { min-height: 96px; padding: 11px; border: 1px solid #30363d; border-radius: 7px; background: #161b22; color: #c9d1d9; text-align: left; cursor: pointer; }
+    .agent-card:hover, .agent-card.selected { border-color: #58a6ff; background: #1c2735; }
+    .agent-card strong { display: block; color: #f0f6fc; font-size: 14px; }
+    .agent-card span { display: block; margin-top: 5px; overflow: hidden; color: #8b949e; font: 11px/1.35 "Cascadia Code", Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .agent-card em { display: inline-block; margin-top: 7px; padding: 2px 5px; border: 1px solid #3fb950; border-radius: 4px; color: #3fb950; font-size: 10px; font-style: normal; }
     .provider-card-title { font-weight: 700; color: #f0f6fc; }
     .provider-card-meta { margin-top: 6px; color: #8b949e; font: 11px/1.45 "Cascadia Code", Consolas, monospace; overflow-wrap: anywhere; }
     .model-picker { display: flex; flex-wrap: wrap; gap: 6px; min-height: 30px; padding: 8px 0; }
     .model-chip { padding: 5px 8px; border: 1px solid #30363d; border-radius: 6px; background: #161b22; color: #c9d1d9; font: 11px "Cascadia Code", Consolas, monospace; cursor: pointer; }
     .model-chip:hover, .model-chip.selected { border-color: #58a6ff; background: #1c2735; color: #f0f6fc; }
+    .skill-layout { min-height: 0; display: grid; grid-template-columns: minmax(280px, 420px) 1fr; gap: 12px; }
+    .skill-list { min-height: 0; overflow: auto; display: grid; align-content: start; gap: 8px; }
+    .skill-card { width: 100%; min-height: 86px; padding: 11px; border: 1px solid #30363d; border-radius: 8px; background: #161b22; color: #c9d1d9; text-align: left; cursor: pointer; }
+    .skill-card:hover, .skill-card.selected { border-color: #58a6ff; background: #1c2735; }
+    .skill-card.disabled { opacity: .62; }
+    .skill-card-title { display: flex; justify-content: space-between; gap: 8px; color: #f0f6fc; font-weight: 700; }
+    .skill-card-desc { margin-top: 6px; color: #8b949e; font-size: 11px; line-height: 1.45; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+    .skill-card-meta { margin-top: 7px; color: #8b949e; font: 11px "Cascadia Code", Consolas, monospace; overflow-wrap: anywhere; }
+    .skill-pill { flex: 0 0 auto; padding: 2px 6px; border: 1px solid #30363d; border-radius: 999px; color: #8b949e; font-size: 10px; font-weight: 700; }
+    .skill-pill.ready { color: #3fb950; border-color: #2ea043; }
+    .skill-pill.local { color: #d29922; border-color: #bb8009; }
+    .skill-editor { min-height: 0; display: grid; grid-template-rows: auto minmax(160px, 1fr); gap: 10px; }
+    .task-layout { min-height: 0; display: grid; grid-template-columns: minmax(280px, 380px) 1fr; gap: 12px; }
+    .task-list { min-height: 0; overflow: auto; display: grid; align-content: start; gap: 8px; }
+    .task-card { width: 100%; padding: 11px; border: 1px solid #30363d; border-radius: 8px; background: #161b22; color: #c9d1d9; text-align: left; cursor: pointer; }
+    .task-card:hover, .task-card.selected { border-color: #58a6ff; background: #1c2735; }
+    .task-card.disabled { opacity: .62; }
+    .task-card-title { display: flex; justify-content: space-between; gap: 8px; color: #f0f6fc; font-weight: 700; }
+    .task-card-meta { margin-top: 6px; color: #8b949e; font: 11px/1.45 "Cascadia Code", Consolas, monospace; overflow-wrap: anywhere; }
+    .task-pill { flex: 0 0 auto; padding: 2px 6px; border: 1px solid #30363d; border-radius: 999px; color: #8b949e; font-size: 10px; font-weight: 700; }
+    .task-pill.on { color: #3fb950; border-color: #2ea043; }
+    .task-editor { min-height: 0; display: grid; grid-template-rows: auto auto minmax(120px, 1fr); gap: 10px; }
+    .task-editor textarea { min-height: 120px; }
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
@@ -176,10 +191,6 @@
   <div id="app">
     <div class="titlebar">
       <div class="brand">OpenClaw Launcher</div>
-      <div class="window-actions">
-        <button class="icon-btn" id="btn-min" title="最小化">—</button>
-        <button class="icon-btn close" id="btn-close" title="关闭">×</button>
-      </div>
     </div>
 
     <div class="layout">
@@ -206,6 +217,7 @@
           <div class="card">
             <div class="actions">
               <button class="btn primary" id="btn-launch" disabled>重启 Gateway</button>
+              <button class="btn danger" id="btn-stop-openclaw" disabled>停止 OpenClaw</button>
               <button class="btn" id="btn-refresh-status">刷新状态</button>
               <button class="btn" id="btn-doctor-fix">一键修复</button>
               <button class="btn" id="btn-dashboard">打开界面</button>
@@ -253,6 +265,7 @@
             <button class="btn" id="btn-agent-add">添加</button>
             <button class="btn danger" id="btn-agent-delete">删除</button>
           </div>
+          <div class="agent-list" id="agent-list"></div>
           <pre id="agents-output">点击“刷新 Agents”查看当前配置。</pre>
         </section>
 
@@ -263,25 +276,49 @@
             <button class="btn" id="btn-skill-info">详情</button>
             <button class="btn" id="btn-skill-search">搜索</button>
             <button class="btn" id="btn-skill-install">安装</button>
+            <button class="btn danger" id="btn-skill-remove">移除</button>
           </div>
-          <pre id="skills-output">点击“刷新 Skills”查看可用技能。</pre>
+          <div class="skill-layout">
+            <div class="skill-list" id="skill-list"></div>
+            <div class="skill-editor">
+              <div class="toolbar">
+                <input id="skill-selected" placeholder="选中 Skill 后自动填入" readonly />
+                <button class="btn" id="btn-skill-clear">清空选择</button>
+              </div>
+              <pre id="skills-output">点击“刷新 Skills”查看可用技能。选中左侧 Skill 后可以查看详情或移除非内置 Skill。</pre>
+            </div>
+          </div>
         </section>
 
         <section class="panel" id="panel-tasks">
           <div class="toolbar">
             <button class="btn primary" id="btn-tasks-refresh">刷新任务</button>
             <button class="btn" id="btn-tasks-status">调度状态</button>
-            <input id="task-id" placeholder="任务 ID（运行/删除用）" />
+            <button class="btn" id="btn-task-new">新建</button>
             <button class="btn" id="btn-task-run">立即运行</button>
-            <button class="btn danger" id="btn-task-delete">删除</button>
+            <button class="btn danger" id="btn-task-delete">移除任务</button>
           </div>
-          <div class="toolbar">
-            <input id="task-name" placeholder="任务名称，例如 daily-summary" />
-            <input id="task-every" placeholder="间隔，例如 1h / 30m" />
-            <input id="task-message" placeholder="任务内容，例如 总结今天的状态" />
-            <button class="btn" id="btn-task-add">添加任务</button>
+          <div class="task-layout">
+            <div class="task-list" id="task-list"></div>
+            <div class="task-editor">
+              <div class="toolbar">
+                <input id="task-id" placeholder="选中任务后自动填入 ID" readonly />
+                <input id="task-name" placeholder="任务名称，例如 daily-summary" />
+              </div>
+              <div class="toolbar">
+                <select id="task-schedule-kind" aria-label="调度类型">
+                  <option value="every">间隔</option>
+                  <option value="cron">Cron</option>
+                  <option value="at">一次性</option>
+                </select>
+                <input id="task-schedule-value" placeholder="1h / 30m，或 Cron 表达式" />
+                <input id="task-description" placeholder="备注（可选）" />
+                <button class="btn" id="btn-task-save">保存编辑</button>
+              </div>
+              <textarea id="task-message" placeholder="任务内容，例如 总结今天的状态"></textarea>
+              <pre id="tasks-output">点击“刷新任务”查看当前定时任务。选中左侧任务后可以编辑或移除。</pre>
+            </div>
           </div>
-          <pre id="tasks-output">点击“刷新任务”查看当前定时任务。</pre>
         </section>
 
         <section class="panel" id="panel-logs">

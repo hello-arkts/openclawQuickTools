@@ -55,6 +55,21 @@ struct ProviderConfig {
     pub use_full_path: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AgentEntry {
+    pub id: String,
+    #[serde(default)]
+    pub workspace: String,
+    #[serde(default, rename = "agentDir")]
+    pub agent_dir: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub bindings: u32,
+    #[serde(default, rename = "isDefault")]
+    pub is_default: bool,
+}
+
 fn hide_window(command: &mut std::process::Command) -> &mut std::process::Command {
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
@@ -202,7 +217,7 @@ async fn install_node(app: tauri::AppHandle) -> Result<(), String> {
             "-ExecutionPolicy",
             "Bypass",
             "-Command",
-            r#"$url='https://npmmirror.com/mirrors/node/v22.21.1/node-v22.21.1-x64.msi'; $tmp="$env:TEMP\node-installer.msi"; Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing; Start-Process msiexec.exe -ArgumentList "/i `"$tmp`" /quiet /norestart" -Wait -WindowStyle Hidden; Remove-Item $tmp -Force"#,
+            r#"$releases = Invoke-RestMethod -Uri 'https://npmmirror.com/mirrors/node/index.json' -UseBasicParsing; $version = ($releases | Where-Object { $_.lts } | Select-Object -First 1).version; if (-not $version) { throw '无法获取最新 Node.js LTS 版本' }; $url = "https://npmmirror.com/mirrors/node/$version/node-$version-x64.msi"; $tmp="$env:TEMP\node-installer.msi"; Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing; Start-Process msiexec.exe -ArgumentList "/i `"$tmp`" /quiet /norestart" -Wait -WindowStyle Hidden; Remove-Item $tmp -Force"#,
         ]);
         command
     } else if cfg!(target_os = "macos") && run_cmd("brew", &["--version"]).0 {
@@ -211,7 +226,7 @@ async fn install_node(app: tauri::AppHandle) -> Result<(), String> {
         command
     } else {
         let mut command = tokio::process::Command::new("bash");
-        command.args(["-c", "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash && export NVM_DIR=\"$HOME/.nvm\" && export NVM_NODEJS_ORG_MIRROR=\"https://npmmirror.com/mirrors/node\" && [ -s \"$NVM_DIR/nvm.sh\" ] && . \"$NVM_DIR/nvm.sh\" && nvm install 22 && nvm use 22"]);
+        command.args(["-c", "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash && export NVM_DIR=\"$HOME/.nvm\" && export NVM_NODEJS_ORG_MIRROR=\"https://npmmirror.com/mirrors/node\" && [ -s \"$NVM_DIR/nvm.sh\" ] && . \"$NVM_DIR/nvm.sh\" && nvm install --lts && nvm use --lts"]);
         command
     };
 
@@ -293,6 +308,39 @@ async fn launch_openclaw(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn stop_openclaw(app: tauri::AppHandle) -> Result<(), String> {
+    emit_log(&app, "正在停止 OpenClaw Gateway...", "info");
+
+    let mut command = tokio::process::Command::new(resolve_cmd("openclaw"));
+    command
+        .args(["gateway", "stop"])
+        .env("PATH", system_path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let output = hide_tokio_window(&mut command)
+        .output()
+        .await
+        .map_err(|e| format!("Gateway 停止失败: {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let details = format!("{} {}", stdout.trim(), stderr.trim());
+
+    if output.status.success()
+        || details.contains("not running")
+        || details.contains("No running")
+        || details.contains("stopped")
+    {
+        emit_log(&app, "OpenClaw Gateway 已停止", "success");
+        Ok(())
+    } else {
+        emit_log(&app, &format!("Gateway 停止异常: {details}"), "error");
+        Err(details.trim().to_string())
+    }
+}
+
+#[tauri::command]
 async fn uninstall_openclaw(app: tauri::AppHandle) -> Result<(), String> {
     emit_log(&app, "正在卸载 OpenClaw...", "info");
 
@@ -342,6 +390,85 @@ async fn run_openclaw_command(args: Vec<String>) -> Result<CommandResult, String
     tokio::task::spawn_blocking(move || run_openclaw_command_blocking(args))
         .await
         .map_err(|e| format!("OpenClaw 后台任务失败: {e}"))?
+}
+
+fn parse_agents_json(output: &str) -> Result<Vec<AgentEntry>, String> {
+    let output = output.trim();
+    if let Ok(agents) = serde_json::from_str(output) {
+        return Ok(agents);
+    }
+
+    for (index, _) in output.match_indices('[') {
+        if let Some(Ok(agents)) = serde_json::Deserializer::from_str(&output[index..])
+            .into_iter::<Vec<AgentEntry>>()
+            .next()
+        {
+            return Ok(agents);
+        }
+    }
+    Err("Agents JSON 解析失败".to_string())
+}
+
+fn list_agents_blocking() -> Result<Vec<AgentEntry>, String> {
+    let mut command = std::process::Command::new(resolve_cmd("openclaw"));
+    command
+        .args(["agents", "list", "--json"])
+        .env("PATH", system_path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let output = hide_window(&mut command)
+        .output()
+        .map_err(|e| format!("读取 Agents 失败: {e}"))?;
+    if !output.status.success() {
+        let details = clean_openclaw_output(&format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+        return Err(if details.is_empty() {
+            "OpenClaw 无法读取 Agents".to_string()
+        } else {
+            details
+        });
+    }
+
+    let mut agents = parse_agents_json(&String::from_utf8_lossy(&output.stdout))?;
+    let mut known = agents
+        .iter()
+        .map(|agent| (agent.id.clone(), ()))
+        .collect::<BTreeMap<_, _>>();
+    let agents_dir = home_dir()?.join(".openclaw").join("agents");
+    if let Ok(entries) = fs::read_dir(agents_dir) {
+        for entry in entries.flatten() {
+            if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let id = entry.file_name().to_string_lossy().to_string();
+            if id.is_empty() || known.contains_key(&id) {
+                continue;
+            }
+            let base = entry.path();
+            agents.push(AgentEntry {
+                workspace: base.join("workspace").display().to_string(),
+                agent_dir: base.join("agent").display().to_string(),
+                model: String::new(),
+                bindings: 0,
+                is_default: id == "main",
+                id: id.clone(),
+            });
+            known.insert(id, ());
+        }
+    }
+    agents.sort_by(|left, right| right.is_default.cmp(&left.is_default).then(left.id.cmp(&right.id)));
+    Ok(agents)
+}
+
+#[tauri::command]
+async fn list_agents() -> Result<Vec<AgentEntry>, String> {
+    tokio::task::spawn_blocking(list_agents_blocking)
+        .await
+        .map_err(|e| format!("Agents 后台任务失败: {e}"))?
 }
 
 #[tauri::command]
@@ -739,6 +866,53 @@ fn openclaw_config_path() -> Result<PathBuf, String> {
     Ok(home_dir()?.join(".openclaw").join("openclaw.json"))
 }
 
+fn normalize_skill_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Skill 名称不能为空".to_string());
+    }
+    if name == "." || name == ".." || name.contains(['/', '\\']) {
+        return Err("Skill 名称不合法".to_string());
+    }
+    Ok(name.to_string())
+}
+
+#[tauri::command]
+fn remove_skill(name: String) -> Result<String, String> {
+    let name = normalize_skill_name(&name)?;
+    let home = home_dir()?;
+    let roots = [
+        home.join(".openclaw").join("skills"),
+        home.join(".agents").join("skills"),
+        home.join(".codex").join("skills"),
+    ];
+
+    for root in roots {
+        if !root.exists() {
+            continue;
+        }
+        let target = root.join(&name);
+        if !target.is_dir() || !target.join("SKILL.md").is_file() {
+            continue;
+        }
+
+        let root = root
+            .canonicalize()
+            .map_err(|e| format!("解析 Skill 根目录失败: {e}"))?;
+        let target = target
+            .canonicalize()
+            .map_err(|e| format!("解析 Skill 目录失败: {e}"))?;
+        if !target.starts_with(&root) {
+            return Err("拒绝删除 Skill 根目录外的路径".to_string());
+        }
+
+        fs::remove_dir_all(&target).map_err(|e| format!("移除 Skill 失败: {e}"))?;
+        return Ok(target.display().to_string());
+    }
+
+    Err("未找到可移除的本地 Skill。内置 Skill 不能移除。".to_string())
+}
+
 fn read_openclaw_config() -> Result<Value, String> {
     let path = openclaw_config_path()?;
     let text = fs::read_to_string(&path).map_err(|e| format!("读取 OpenClaw 配置失败: {e}"))?;
@@ -1092,6 +1266,16 @@ mod tests {
         assert_eq!(provider.models[0].id, "deepseek-chat");
         assert!(uses_full_path(&json!({ "baseUrl": "https://example.com/v1/chat/completions" })));
     }
+
+    #[test]
+    fn parses_agents_after_cli_warnings() {
+        let agents = parse_agents_json("[state-migrations] warning\n[{\"id\":\"main\",\"isDefault\":true}]")
+            .expect("agent JSON should be parsed");
+
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].id, "main");
+        assert!(agents[0].is_default);
+    }
 }
 
 fn emit_log(app: &tauri::AppHandle, text: &str, level: &str) {
@@ -1121,10 +1305,13 @@ pub fn run() {
             install_node,
             install_openclaw,
             launch_openclaw,
+            list_agents,
             list_providers,
             open_dashboard,
+            remove_skill,
             run_openclaw_command,
             save_provider,
+            stop_openclaw,
             uninstall_openclaw,
         ])
         .run(tauri::generate_context!())
